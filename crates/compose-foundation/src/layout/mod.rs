@@ -14,7 +14,7 @@ use std::rc::Rc;
 use compose_runtime::{composable, remember_keyed};
 use compose_ui::platform::round_to_int;
 use compose_ui::{
-    Alignment, AlignmentLine, Constraints, HorizontalAlignment, IntrinsicMeasurable,
+    AlignScope, Alignment, AlignmentLine, Constraints, HorizontalAlignment, IntrinsicMeasurable,
     IntrinsicMeasureScope, Layout, Measurable, MeasurePolicy, MeasureResult, MeasureScope,
     Modifier, ParentAlignment, Placeable, VerticalAlignment, empty_measure_policy,
 };
@@ -141,17 +141,32 @@ impl RowColumnMeasurePolicy {
         }
     }
 
-    /// The child's bias across the axis, and whether a right-to-left layout mirrors it: a
-    /// horizontal alignment does in a column, nothing does in a row (Compose's `Row` aligns
-    /// across in `Ltr`). An alignment of the other axis aligns across all the same, as
-    /// Compose's `CrossAxisAlignment` (a `ColumnScope.align(End)` child of a row goes to its
-    /// bottom, D1927).
-    fn cross_bias_of(&self, scope: &MeasureScope<'_>, measurable: Measurable) -> (f32, bool) {
-        let column = self.orientation == Orientation::Vertical;
+    /// The child's bias across the axis, mirrored in a right-to-left column (`rtl_column`) for a
+    /// horizontal alignment, never in a row (Compose's `Row` aligns across in `Ltr`). An
+    /// alignment of the other axis aligns across all the same, as Compose's `CrossAxisAlignment`
+    /// (a `ColumnScope.align(End)` child of a row goes to its bottom, D1927, D2111).
+    fn cross_bias_of(
+        &self,
+        scope: &MeasureScope<'_>,
+        measurable: Measurable,
+        rtl_column: bool,
+    ) -> f32 {
         match scope.parent_data(measurable).alignment {
-            Some(ParentAlignment::Vertical(alignment)) => (alignment.bias, false),
-            Some(ParentAlignment::Horizontal(alignment)) => (alignment.bias, column),
-            _ => (self.cross_bias, column),
+            Some(ParentAlignment::Vertical(alignment)) => alignment.bias,
+            Some(ParentAlignment::Horizontal(alignment)) => {
+                if rtl_column {
+                    -alignment.bias
+                } else {
+                    alignment.bias
+                }
+            }
+            _ => {
+                if rtl_column {
+                    -self.cross_bias
+                } else {
+                    self.cross_bias
+                }
+            }
         }
     }
 }
@@ -280,15 +295,18 @@ impl MeasurePolicy for RowColumnMeasurePolicy {
         let mut positions: Buffer<i32> = Buffer::new(count);
         let positions = positions.as_mut();
         // A column's arrangement runs from the top whatever the layout direction.
-        let direction = match self.orientation {
-            Orientation::Horizontal => scope.layout_direction(),
-            Orientation::Vertical => compose_ui::LayoutDirection::Ltr,
+        let layout_direction = scope.layout_direction();
+        let (direction, rtl_column) = match self.orientation {
+            Orientation::Horizontal => (layout_direction, false),
+            Orientation::Vertical => (
+                compose_ui::LayoutDirection::Ltr,
+                layout_direction == compose_ui::LayoutDirection::Rtl,
+            ),
         };
         self.arrangement.arrange(main_size, sizes, direction, &density, positions);
         for (index, &measurable) in measurables.iter().enumerate() {
             let Some(placeable) = placeables[index] else { continue };
-            let rtl_column = self.orientation == Orientation::Vertical
-                && scope.layout_direction() == compose_ui::LayoutDirection::Rtl;
+            let child_cross = self.cross(&placeable);
             let by_line =
                 if any_align_by { line_position(scope, measurable, &placeable) } else { None };
             let cross = if let Some(position) = by_line {
@@ -296,17 +314,17 @@ impl MeasurePolicy for RowColumnMeasurePolicy {
                 if position == AlignmentLine::UNSPECIFIED {
                     0
                 } else if rtl_column {
-                    cross_size - self.cross(&placeable) - (before_line - position)
+                    cross_size - child_cross - (before_line - position)
                 } else {
                     before_line - position
                 }
             } else {
-                let (mut bias, mirrored) = self.cross_bias_of(scope, measurable);
-                // A column's start is on the right in a right-to-left layout.
-                if rtl_column && mirrored {
-                    bias = -bias;
+                let bias = self.cross_bias_of(scope, measurable, rtl_column);
+                if child_cross == cross_size || bias == -1.0 {
+                    0
+                } else {
+                    VerticalAlignment { bias }.align(child_cross, cross_size)
                 }
-                VerticalAlignment { bias }.align(self.cross(&placeable), cross_size)
             };
             match self.orientation {
                 Orientation::Horizontal => scope.place(&placeable, positions[index], cross),
@@ -561,6 +579,19 @@ impl compose_runtime::ComposeArg for BoxWithConstraintsScope {
     }
 }
 
+impl AlignScope for BoxWithConstraintsScope {
+    type Alignment = Alignment;
+    fn parent_alignment(alignment: Alignment) -> ParentAlignment {
+        ParentAlignment::Box(alignment)
+    }
+}
+
+impl From<BoxWithConstraintsScope> for BoxScope {
+    fn from(_: BoxWithConstraintsScope) -> BoxScope {
+        BoxScope::__new()
+    }
+}
+
 /// A box whose content depends on its constraints, as Compose's `BoxWithConstraints`: a
 /// `SubcomposeLayout` composing the content while it's measured, reading them from its scope. A
 /// measurement with the constraints it last composed for composes nothing.
@@ -692,6 +723,92 @@ pub(crate) struct BoxMeasurePolicy {
     propagate_min_constraints: bool,
 }
 
+impl BoxMeasurePolicy {
+    /// Places `placeable` by `alignment` in the box, as Compose's `placeInBox`; one filling the
+    /// box, or aligned top-start left to right, at the origin without the rounding (D2111).
+    fn place_in_box(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        placeable: &Placeable,
+        alignment: Alignment,
+        width: i32,
+        height: i32,
+    ) {
+        if placeable.width == width && placeable.height == height {
+            scope.place(placeable, 0, 0);
+            return;
+        }
+        let direction = if alignment.horizontal_bias == 0.0 {
+            compose_ui::LayoutDirection::Ltr
+        } else {
+            scope.layout_direction()
+        };
+        if alignment == Alignment::TOP_START && direction == compose_ui::LayoutDirection::Ltr {
+            scope.place(placeable, 0, 0);
+            return;
+        }
+        let space = compose_ui::IntSize::new(width, height);
+        let position = alignment.align(placeable.size(), space, direction);
+        scope.place_at(placeable, position);
+    }
+
+    #[inline(never)]
+    fn measure_many(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        measurables: &[Measurable],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let count = measurables.len();
+        let child_constraints = if self.propagate_min_constraints {
+            constraints
+        } else {
+            Constraints { min_width: 0, min_height: 0, ..constraints }
+        };
+        // Each child with its alignment (its own, or the box's), its parent data read once.
+        let mut placeables: Buffer<Option<(Placeable, Alignment)>> = Buffer::new(count);
+        let placeables = placeables.as_mut();
+        let (mut width, mut height) = (constraints.min_width, constraints.min_height);
+        // As Compose's: the children matching the box's size measured after the others have
+        // sized it, and centered.
+        let mut any_matches_parent = false;
+        for (index, &measurable) in measurables.iter().enumerate() {
+            let alignment = match scope.parent_data(measurable).alignment {
+                Some(ParentAlignment::Box(alignment)) => alignment,
+                Some(ParentAlignment::MatchParentSize) => {
+                    any_matches_parent = true;
+                    continue;
+                }
+                _ => self.alignment,
+            };
+            let placeable = scope.measure(measurable, child_constraints);
+            width = width.max(placeable.width);
+            height = height.max(placeable.height);
+            placeables[index] = Some((placeable, alignment));
+        }
+        if any_matches_parent {
+            // The infinity check is for intrinsics measured by measuring.
+            let min = |size: i32| if size == Constraints::INFINITY { 0 } else { size };
+            let matching = Constraints {
+                min_width: min(width),
+                max_width: width,
+                min_height: min(height),
+                max_height: height,
+            };
+            for (index, &measurable) in measurables.iter().enumerate() {
+                if placeables[index].is_none() {
+                    let placeable = scope.measure(measurable, matching);
+                    placeables[index] = Some((placeable, Alignment::CENTER));
+                }
+            }
+        }
+        for &(placeable, alignment) in placeables.iter().flatten() {
+            self.place_in_box(scope, &placeable, alignment, width, height);
+        }
+        scope.layout(width, height)
+    }
+}
+
 impl MeasurePolicy for BoxMeasurePolicy {
     /// Equal data measures the same (Compose's policies are data classes; D1354).
     fn same(&self, other: &dyn std::any::Any) -> bool {
@@ -704,83 +821,45 @@ impl MeasurePolicy for BoxMeasurePolicy {
         measurables: &[Measurable],
         constraints: Constraints,
     ) -> MeasureResult {
-        if measurables.is_empty() {
-            return scope.layout(constraints.min_width, constraints.min_height);
-        }
-        let child_constraints =
-            if self.propagate_min_constraints { constraints } else { constraints.loosen() };
-        let count = measurables.len();
-        if count == 1 {
-            // As Compose's: a lone child without buffers; matching the box's size, it's measured
-            // at the minimums.
-            let measurable = measurables[0];
-            let (min_width, min_height) = (constraints.min_width, constraints.min_height);
-            let (alignment, placeable, width, height) =
-                match scope.parent_data(measurable).alignment {
-                    Some(ParentAlignment::MatchParentSize) => {
-                        let fixed = Constraints::fixed(min_width, min_height);
-                        let placeable = scope.measure(measurable, fixed);
-                        (Alignment::CENTER, placeable, min_width, min_height)
-                    }
-                    alignment => {
-                        let alignment = match alignment {
-                            Some(ParentAlignment::Box(alignment)) => alignment,
-                            _ => self.alignment,
-                        };
-                        let placeable = scope.measure(measurable, child_constraints);
-                        let (width, height) = (placeable.width, placeable.height);
-                        (alignment, placeable, min_width.max(width), min_height.max(height))
-                    }
-                };
-            let space = compose_ui::IntSize::new(width, height);
-            let position = alignment.align(placeable.size(), space, scope.layout_direction());
-            scope.place_at(&placeable, position);
-            return scope.layout(width, height);
-        }
-        let mut placeables: Buffer<Option<Placeable>> = Buffer::new(count);
-        let placeables = placeables.as_mut();
-        let (mut width, mut height) = (constraints.min_width, constraints.min_height);
-        // Each child's alignment, read once: its own, or the box's.
-        let mut alignments: Buffer<Option<Alignment>> = Buffer::new(count);
-        let alignments = alignments.as_mut();
-        // As Compose's: the children matching the box's size measured after the others have
-        // sized it, and centered.
-        let mut any_matches_parent = false;
-        for (index, &measurable) in measurables.iter().enumerate() {
-            let (alignment, matches_parent) = match scope.parent_data(measurable).alignment {
-                Some(ParentAlignment::Box(alignment)) => (alignment, false),
-                Some(ParentAlignment::MatchParentSize) => (Alignment::CENTER, true),
-                _ => (self.alignment, false),
-            };
-            alignments[index] = Some(alignment);
-            if matches_parent {
-                any_matches_parent = true;
-                continue;
-            }
-            let placeable = scope.measure(measurable, child_constraints);
-            width = width.max(placeable.width);
-            height = height.max(placeable.height);
-            placeables[index] = Some(placeable);
-        }
-        if any_matches_parent {
-            // The infinity check is for intrinsics measured by measuring.
-            let min = |size: i32| if size == Constraints::INFINITY { 0 } else { size };
-            let matching = Constraints::new(min(width), width, min(height), height);
-            for (index, &measurable) in measurables.iter().enumerate() {
-                if placeables[index].is_none() {
-                    placeables[index] = Some(scope.measure(measurable, matching));
+        match measurables {
+            [] => scope.layout(constraints.min_width, constraints.min_height),
+            &[measurable] => {
+                // As Compose's: a lone child without buffers; matching the box's size, it's
+                // measured at the minimums (D1929, D2111).
+                let (min_width, min_height) = (constraints.min_width, constraints.min_height);
+                let own = scope.parent_data(measurable).alignment;
+                if matches!(own, Some(ParentAlignment::MatchParentSize)) {
+                    let fixed = Constraints {
+                        min_width,
+                        max_width: min_width,
+                        min_height,
+                        max_height: min_height,
+                    };
+                    let placeable = scope.measure(measurable, fixed);
+                    self.place_in_box(scope, &placeable, Alignment::CENTER, min_width, min_height);
+                    return scope.layout(min_width, min_height);
                 }
+                let child_constraints = if self.propagate_min_constraints {
+                    constraints
+                } else {
+                    Constraints { min_width: 0, min_height: 0, ..constraints }
+                };
+                let placeable = scope.measure(measurable, child_constraints);
+                let width = min_width.max(placeable.width);
+                let height = min_height.max(placeable.height);
+                if placeable.width == width && placeable.height == height {
+                    scope.place(&placeable, 0, 0);
+                } else {
+                    let alignment = match own {
+                        Some(ParentAlignment::Box(alignment)) => alignment,
+                        _ => self.alignment,
+                    };
+                    self.place_in_box(scope, &placeable, alignment, width, height);
+                }
+                scope.layout(width, height)
             }
+            _ => self.measure_many(scope, measurables, constraints),
         }
-        let space = compose_ui::IntSize::new(width, height);
-        for index in 0..count {
-            let (Some(placeable), Some(alignment)) = (placeables[index], alignments[index]) else {
-                continue;
-            };
-            let position = alignment.align(placeable.size(), space, scope.layout_direction());
-            scope.place_at(&placeable, position);
-        }
-        scope.layout(width, height)
     }
 }
 

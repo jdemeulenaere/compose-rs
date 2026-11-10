@@ -251,7 +251,7 @@ impl Modifier {
     /// `BoxScope.matchParentSize`: it plays no part in the box's size (`fill_max_size` would
     /// make the box as large as it can). A form of `align` (it centers it), the outermost of
     /// them winning.
-    pub fn match_parent_size(self, _scope: BoxScope) -> Modifier {
+    pub fn match_parent_size(self, _scope: impl Into<BoxScope>) -> Modifier {
         self.then_element(Element::Align(ParentAlignment::MatchParentSize))
     }
 

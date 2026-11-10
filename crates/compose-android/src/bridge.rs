@@ -1982,9 +1982,10 @@ fn key_event(
         meta: meta & 0x10000 != 0,
     };
     let kind = if down { KeyEventType::KeyDown } else { KeyEventType::KeyUp };
-    // A typed character's text, unless it's a shortcut, as the desktop host does.
+    // A typed character's text, unless it's a shortcut (`ComposeRsView.kt` strips Ctrl, Alt and
+    // Meta from `getUnicodeChar` so the shortcut's key is known, D2112).
     let text = character
-        .filter(|c| down && !modifiers.ctrl && !modifiers.meta && !c.is_control())
+        .filter(|c| down && !modifiers.ctrl && !modifiers.alt && !modifiers.meta && !c.is_control())
         .map(|c| c.to_string());
     let event = KeyEvent { key, kind, modifiers, from_soft_keyboard: soft };
     Some((event, text))
@@ -3024,6 +3025,19 @@ mod tests {
     fn alt_ctrl_meta_shift_is_pressed() {
         let all = META_ALT_ON | META_CTRL_ON | META_META_ON | META_SHIFT_ON;
         assert_eq!(pressed(all), (true, true, true, true));
+    }
+
+    #[test]
+    fn alt_shortcut_does_not_type_text() {
+        let (alt_a, alt_text) = key_event(0, 'a' as i32, true, META_ALT_ON, false).unwrap();
+        assert_eq!(alt_a.key, Key::Character('a'));
+        assert!(alt_a.modifiers.alt);
+        assert_eq!(alt_text, None);
+
+        let (shift_a, shift_text) = key_event(0, 'A' as i32, true, META_SHIFT_ON, false).unwrap();
+        assert_eq!(shift_a.key, Key::Character('A'));
+        assert!(shift_a.modifiers.shift);
+        assert_eq!(shift_text.as_deref(), Some("A"));
     }
 
     /// A key from the view reaches a focused node's `on_key_event`, which consumes it, for a

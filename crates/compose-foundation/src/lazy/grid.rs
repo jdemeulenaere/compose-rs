@@ -1511,10 +1511,6 @@ struct Measurer<'a, 's, 'scope> {
     scope: &'a mut SubcomposeMeasureScope<'s, 'scope>,
     /// What composes the items as the measurement reaches them.
     composer: &'a mut ItemComposer,
-    /// The items composed before this measurement, and whether only those (and those it composed)
-    /// are measured: beyond those wanted, up to a pinned one.
-    before: &'a [usize],
-    only_composed: bool,
     placeables: super::slots::ItemMap<Placeable>,
     lines: &'a mut Lines,
     slots: &'a Slots,
@@ -1561,9 +1557,6 @@ impl MeasuredLines {
 impl Measurer<'_, '_, '_> {
     /// Item `item`'s layout, composed as the measurement reaches it; `None` past the items.
     fn child_of(&mut self, item: usize) -> Option<Measurable> {
-        if self.only_composed && !self.before.contains(&item) && !self.composer.has(item) {
-            return None;
-        }
         self.composer.measurable(self.scope, item)
     }
 
@@ -1782,8 +1775,6 @@ impl ItemsMeasurePolicy for LazyGridLayout {
         let mut measurer = Measurer {
             scope,
             composer,
-            before: &children,
-            only_composed: false,
             placeables: {
                 let mut placeables = super::slots::ItemMap::default();
                 placeables.reserve(children.len() + 8);
@@ -2314,14 +2305,12 @@ impl ItemsMeasurePolicy for LazyGridLayout {
         // The last item shown, and ahead the lines up to the last the pass that's now showed past
         // it, placed after those in view, as Compose's `linesRetainedForLookahead` (D1318).
         let last_shown = placed.last().map(|&(line, _)| m.lines.start(line + 1).saturating_sub(1));
-        let mut retained_end = 0;
         if looking_ahead {
             state.ahead_last.set(last_shown);
             if let Some(last) = state.approach_last.get().filter(|&last| last < count)
                 && last_shown.is_none_or(|shown| last > shown)
             {
-                retained_end = m.lines.line_of(last) + 1;
-                placed_end = placed_end.max(retained_end);
+                placed_end = placed_end.max(m.lines.line_of(last) + 1);
             }
         } else if tells {
             state.approach_last.set(None);
@@ -2337,7 +2326,6 @@ impl ItemsMeasurePolicy for LazyGridLayout {
         let mut main =
             placed.last().map_or(before, |(line, main)| main + (m.size_of(*line) + spacing).max(0));
         for next in end_index..placed_end {
-            m.only_composed = next >= wanted_end && next >= retained_end;
             if let Some(size) = m.line(next) {
                 beyond_lines.push((next, main));
                 main += (size + spacing).max(0);
@@ -2350,13 +2338,11 @@ impl ItemsMeasurePolicy for LazyGridLayout {
         let mut ahead_lines: Vec<(usize, i32)> = Vec::new();
         let mut main = placed.first().map_or(before, |(_, main)| *main);
         for previous in (placed_start.min(lead)..lead).rev() {
-            m.only_composed = previous < wanted_start;
             if let Some(size) = m.line(previous) {
                 main -= (size + spacing).max(0);
                 ahead_lines.push((previous, main));
             }
         }
-        m.only_composed = false;
         ahead_lines.reverse();
         let extent_start = main - before;
         let pending = state.pending.get();
@@ -2491,9 +2477,17 @@ impl ItemsMeasurePolicy for LazyGridLayout {
                 // (Compose's `lookaheadOffset`), those moving away too.
                 for place in state.lookahead_places.borrow().iter() {
                     let Some((placeable, _)) = m.item(place.index) else { continue };
-                    overrides.push((placeable, place.main, place.cross));
                     animated_items.push((place.key, placeable, place.main, place.cross));
                     pinned.retain(|(other, _, _)| *other != placeable);
+                    if let Some(entry) = pinned_before
+                        .iter_mut()
+                        .chain(&mut pinned_after)
+                        .find(|(other, _, _)| *other == placeable)
+                    {
+                        (entry.1, entry.2) = (place.main, place.cross);
+                        continue;
+                    }
+                    overrides.push((placeable, place.main, place.cross));
                     let lines = ahead_lines.iter().chain(&placed).chain(&beyond_lines);
                     let in_lines = lines.clone().any(|&(line, _)| {
                         m.measured_line(line).is_some_and(|(start, end, _)| {
@@ -2561,6 +2555,8 @@ impl ItemsMeasurePolicy for LazyGridLayout {
                     let lane_cross = away.cross;
                     if let Some(placeable) = m.placeables.get(&away.index).copied() {
                         // Placed once, here: the items kept apart were out of the way so far.
+                        pinned_before.retain(|(other, _, _)| *other != placeable);
+                        pinned_after.retain(|(other, _, _)| *other != placeable);
                         pinned.retain(|(other, _, _)| *other != placeable);
                         let entry = (placeable, away.main + before, lane_cross);
                         if away.to_start {
