@@ -497,7 +497,6 @@ fn held_mouse_across_edge_and_offset_bounds_tracks_each_entry_and_prunes_from_fi
 /// mouse itself is cancelled (`cancel_pointer(PointerId(0))`, as `MouseInjectionScope::cancel` and
 /// `PanStart` while pressed call) and when a touch finger sharing a hovered node is cancelled.
 #[test]
-#[ignore = "review: cancel_pointer leaves cancelled entries in hovered and stylus_hovered so the next move sends Move instead of Enter"]
 fn single_pointer_cancel_clears_cancelled_entries_from_mouse_and_stylus_hover() {
     // 1. Mouse pressed on a `ClickableNode` + probe, then `cancel_pointer(PointerId(0))`: hover
     // and press end, and the next unpressed move inside re-enters hover.
@@ -578,7 +577,6 @@ fn single_pointer_cancel_clears_cancelled_entries_from_mouse_and_stylus_hover() 
 /// move (`D2121`) enters the recaptured path (`Enter` with `down=true`), subsequent moves inside
 /// stay `Move` (no spurious mid-box `Enter`), and dragging outside delivers pressed `Exit`.
 #[test]
-#[ignore = "review: a held mouse recaptured after cancel skips follow_pressed_hover on the recapture move"]
 fn held_mouse_recaptured_after_cancel_enters_on_recapture_moves_inside_and_exits_when_dragged_out()
 {
     for single in [false, true] {

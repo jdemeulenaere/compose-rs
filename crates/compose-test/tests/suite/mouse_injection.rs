@@ -236,7 +236,6 @@ fn click_press_in_release_out() {
 /// Cancelling a mouse press (`MouseInjectionScope::cancel`) forgets the hover on the cancelled
 /// path, so the next unpressed move inside the box enters it again (`D2435`).
 #[test]
-#[ignore = "review: cancel_pointer leaves cancelled entries in hovered so MouseInjectionScope::cancel followed by move_to inside sends Move instead of Enter"]
 fn cancel_then_move_inside_reenters() {
     let heard = run(|mouse| {
         mouse.move_to(IN);

@@ -504,6 +504,7 @@ impl UiTree {
                 previous = None;
             }
             let captured = self.captures.iter().position(|(pointer, _)| *pointer == event.pointer);
+            let mut now_captured = captured.is_some();
             // Another of a mouse's buttons: it stays with what the first one pressed.
             let already_down = event.pointer_type == crate::input::PointerType::Mouse
                 && captured.is_some()
@@ -549,6 +550,7 @@ impl UiTree {
                 {
                     let path = self.hit_test(position);
                     self.captures.push((event.pointer, path.clone()));
+                    now_captured = true;
                     path
                 }
                 _ => self.hit_test(position),
@@ -622,10 +624,11 @@ impl UiTree {
             } else if is_mouse
                 && event.pressed
                 && event.kind == PointerEventType::Move
-                && captured.is_some()
+                && now_captured
             {
                 // A held mouse's move: each node of its path is in while the mouse is in its
-                // bounds, and hears the move as `Exit` or `Enter` where that changes (D2361).
+                // bounds, and hears the move as `Exit` or `Enter` where that changes (D2361,
+                // D2436: one coming down again after a cancel enters its new path here).
                 self.follow_pressed_hover(&path, position, Some(&mut kinds));
             }
             // For a press, whether something before each entry (around it) waits for a gesture past
@@ -826,10 +829,13 @@ impl UiTree {
         delegates_in_delegation_order(&mut path);
         for entry in path {
             // Compose has no cancel of one pointer: a node's pointers go together, and it hears the
-            // others no more until a new press.
+            // others no more until a new press (nor stays hovered: its next move enters again,
+            // D2435).
             for (_, other) in &mut self.captures {
-                other.retain(|it| *it != entry);
+                other.retain(|it| !same_node(it, &entry));
             }
+            self.hovered.retain(|it| !same_node(it, &entry));
+            self.stylus_hovered.retain(|it| !same_node(it, &entry));
             if let Some(value) = self.get_mut(entry.node)
                 && value.chain_version == entry.version
                 && let Some(handler) = value.chain[entry.index as usize]
@@ -1329,7 +1335,7 @@ impl UiTree {
             if value.overlay {
                 return Some(node);
             }
-            node = value.parent?;
+            node = self.parent_for_callbacks(node, value)?;
         }
     }
 
