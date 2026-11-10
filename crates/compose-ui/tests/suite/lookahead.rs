@@ -2313,7 +2313,6 @@ fn nested_lookahead_scopes_each_give_their_own_scope_coordinates() {
 /// Per-node `force_remeasure` on `L1` after `L1` and `L3` need measuring ahead (while `L2`'s
 /// size holds so lookahead skips `L2`'s block) and all three need placing now: `L3`'s lookahead
 /// block runs before `L1`, `L2` and `L3`'s blocks now, all before `force_remeasure` returns.
-#[ignore = "the placement order passes since D2385, but `!host.needs_frame()` fails: `force_remeasure` leaves a draw pending (D1164), where Compose's test checks only the nodes' pending measure and layout flags"]
 #[test]
 fn a_per_node_force_remeasure_runs_lookahead_placement_before_now_placement() {
     let (l1_ahead, l3_ahead, blocks) =
@@ -2373,7 +2372,10 @@ fn a_per_node_force_remeasure_runs_lookahead_placement_before_now_placement() {
     assert!(l3_ahead_at < l3_now_at, "{placed:?}");
     assert!(!placed.contains(&("L2", true)), "lookahead skipped L2: {placed:?}");
     assert!(placed.contains(&("L1", false)) && placed.contains(&("L2", false)), "{placed:?}");
-    assert!(!host.needs_frame());
+    // Compose's test then asserts `L1`'s `lookaheadMeasurePending` and `L1`, `L2` and `L3`'s
+    // `layoutPending` false. Here: the next frame measures and places none of them, ahead or
+    // now. It still draws, as a measurement leaves its boundary to draw again (D1164), so
+    // `needs_frame` is no stand-in for those flags.
     log.borrow_mut().clear();
     host.frame();
     assert!(log.borrow().is_empty(), "{:?}", log.borrow());
