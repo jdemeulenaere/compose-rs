@@ -111,7 +111,6 @@ fn base_text_style_shift_and_transform_combine_and_cancel_with_spans_and_ignore_
 }
 
 #[test]
-#[ignore = "review: non-finite scale_x poisons em letter spacing with NaN/Infinity"]
 fn letter_spacing_baseline_shift_and_font_features_handle_zero_and_non_finite_values_safely() {
     let d = Density::new(2.0);
     for bad_scale in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {

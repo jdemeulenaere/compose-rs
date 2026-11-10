@@ -514,7 +514,7 @@ internal class TextMeasurer(
         paint.textSkewX = style.skewX
         // In ems of the scaled size, as Compose's `applySpanStyle` sets an sp spacing.
         val em = style.fontPx * style.scaleX
-        paint.letterSpacing = if (em != 0f) style.letterSpacingPx / em else 0f
+        paint.letterSpacing = if (em != 0f && em.isFinite()) style.letterSpacingPx / em else 0f
         paint.isUnderlineText = style.decoration and 1 != 0
         paint.isStrikeThruText = style.decoration and 2 != 0
         paint.fontFeatureSettings = style.fontFeatures
@@ -695,6 +695,9 @@ internal class TextMeasurer(
         var runBrush = false
         val baseBackground = base.background != 0 && text.isNotEmpty()
         val baseShift = base.baselineShift != 0f && text.isNotEmpty()
+        // `BoringLayout` ignores `TextPaint.baselineShift` in its line metrics (only `StaticLayout`
+        // widens `ascent`/`descent` for it), as Compose's `TextLayout` (`!hasBaselineShiftSpans`).
+        var baselineShifted = baseShift
         val content: CharSequence = if (runCount == 0 && !hasPlaceholders && !baseBackground && !baseShift) {
             text
         } else {
@@ -721,7 +724,8 @@ internal class TextMeasurer(
                         style.baselineShift,
                     )
                     spannable.setSpan(span, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    if (style.paint.fontPx * style.paint.scaleX != 0f && style.paint.letterSpacingPx != 0f) letterSpaced = true
+                    if (style.baselineShift != 0f) baselineShifted = true
+                    if ((style.paint.fontPx * style.paint.scaleX).let { it != 0f && it.isFinite() } && style.paint.letterSpacingPx != 0f) letterSpaced = true
                     if (style.extras?.brush != null) runBrush = true
                     if (style.background != 0) {
                         spannable.setSpan(
@@ -758,7 +762,7 @@ internal class TextMeasurer(
         // desktop measurer: alignment and the cursor's movement agree with what's drawn.
         val direction = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR
         // One line of left-to-right text has boring metrics (D330): its width, in one measure.
-        val boring = boringMetrics(content, paint, direction, lineHeight, base.lineHeightStyle)
+        val boring = if (baselineShifted) null else boringMetrics(content, paint, direction, lineHeight, base.lineHeightStyle)
         val boringWidth = if (boring == null) 0f else intrinsicWidth(boring.width.toFloat(), letterSpaced)
         val maxIntrinsicWidth = if (boring != null) {
             boringWidth

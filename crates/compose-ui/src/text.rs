@@ -717,7 +717,11 @@ pub fn resolve_letter_spacing_px(
     font_px: f32,
     density: &Density,
 ) -> Option<f32> {
-    let scale_x = style.text_geometric_transform.map_or(1.0, |transform| transform.scale_x);
+    let scale_x = style
+        .text_geometric_transform
+        .map(|transform| transform.scale_x)
+        .filter(|scale_x| scale_x.is_finite())
+        .unwrap_or(1.0);
     resolve_text_unit_px(style.letter_spacing, font_px * scale_x, density)
 }
 

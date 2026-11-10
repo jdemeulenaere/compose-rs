@@ -1817,7 +1817,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "review: non-finite scale_x encodes NaN letter spacing in Android request"]
     fn review_zero_and_non_finite_scale_x_encode_finite_letter_spacing() {
         use compose_ui::{TextGeometricTransform, UnitExt};
         let zero_em = TextStyle {

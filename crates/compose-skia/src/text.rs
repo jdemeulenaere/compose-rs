@@ -395,22 +395,33 @@ fn paragraph_layout(entry: &Entry) -> compose_ui::platform::ParagraphLayout {
 /// Lays out paragraphs with SkParagraph and the system's fonts, keeping each until released:
 /// the renderer draws a paragraph by handle with the same object.
 pub struct SkiaTextMeasurer {
+    font_manager: FontMgr,
     collection: FontCollection,
+    /// Separate `FontCollection`s for explicit `TextMotion::Static` and `TextMotion::Animated`,
+    /// created on first use: SkParagraph's `ParagraphCache` ignores `subpixel` and `font_hinting`,
+    /// so isolating each motion mode avoids both stale cross-motion cache hits and cache thrashing
+    /// when motions alternate within the same frame (D2304, D2426).
+    static_collection: Option<FontCollection>,
+    animated_collection: Option<FontCollection>,
     fonts: Rc<PlatformFonts>,
     /// The typefaces of fonts given, under an alias each, for SkParagraph to find by family.
     provider: TypefaceFontProvider,
     aliases: HashMap<u32, String>,
     paragraphs: Vec<Option<Entry>>,
     free: Vec<u64>,
-    /// The text motion of the last layout: SkParagraph's `ParagraphCache` ignores `subpixel` and
-    /// `font_hinting`, so changing it resets the cache (D2304).
-    last_motion: Option<Option<compose_ui::TextMotion>>,
 }
 
 impl Default for SkiaTextMeasurer {
     fn default() -> Self {
         SkiaTextMeasurer::new()
     }
+}
+
+fn new_font_collection(font_manager: &FontMgr, provider: &TypefaceFontProvider) -> FontCollection {
+    let mut collection = FontCollection::new();
+    collection.set_default_font_manager(font_manager.clone(), None);
+    collection.set_asset_font_manager(Some(FontMgr::from(provider.clone())));
+    collection
 }
 
 impl SkiaTextMeasurer {
@@ -420,12 +431,13 @@ impl SkiaTextMeasurer {
     }
 
     pub fn with_font_manager(font_manager: FontMgr) -> SkiaTextMeasurer {
-        let mut collection = FontCollection::new();
-        collection.set_default_font_manager(font_manager.clone(), None);
         let provider = TypefaceFontProvider::new();
-        collection.set_asset_font_manager(Some(FontMgr::from(provider.clone())));
+        let collection = new_font_collection(&font_manager, &provider);
         SkiaTextMeasurer {
+            font_manager: font_manager.clone(),
             collection,
+            static_collection: None,
+            animated_collection: None,
             fonts: PlatformFonts::new(Rc::new(SkiaFontLoader {
                 manager: font_manager,
                 bases: RefCell::default(),
@@ -434,7 +446,22 @@ impl SkiaTextMeasurer {
             aliases: HashMap::new(),
             paragraphs: Vec::new(),
             free: Vec::new(),
-            last_motion: None,
+        }
+    }
+
+    fn collection_for(&mut self, motion: Option<compose_ui::TextMotion>) -> FontCollection {
+        let font_manager = &self.font_manager;
+        let provider = &self.provider;
+        match motion {
+            None => self.collection.clone(),
+            Some(compose_ui::TextMotion::Static) => self
+                .static_collection
+                .get_or_insert_with(|| new_font_collection(font_manager, provider))
+                .clone(),
+            Some(compose_ui::TextMotion::Animated) => self
+                .animated_collection
+                .get_or_insert_with(|| new_font_collection(font_manager, provider))
+                .clone(),
         }
     }
 
@@ -466,13 +493,26 @@ impl SkiaTextMeasurer {
         }
         if self.aliases.len() >= REGISTERED_TYPEFACES {
             self.provider = TypefaceFontProvider::new();
-            self.collection.set_asset_font_manager(Some(FontMgr::from(self.provider.clone())));
+            let asset = FontMgr::from(self.provider.clone());
+            self.collection.set_asset_font_manager(Some(asset.clone()));
+            if let Some(still) = &mut self.static_collection {
+                still.set_asset_font_manager(Some(asset.clone()));
+            }
+            if let Some(animated) = &mut self.animated_collection {
+                animated.set_asset_font_manager(Some(asset));
+            }
             self.aliases.clear();
         }
         let alias = format!("compose-rs font {id}");
         self.provider.register_typeface(typeface.clone(), alias.as_str());
         // What the collection knew of the provider's families.
         self.collection.clear_caches();
+        if let Some(still) = &mut self.static_collection {
+            still.clear_caches();
+        }
+        if let Some(animated) = &mut self.animated_collection {
+            animated.clear_caches();
+        }
         self.aliases.insert(id, alias.clone());
         Some(alias)
     }
@@ -804,12 +844,6 @@ impl SkiaTextMeasurer {
         blend_mode: compose_ui::BlendMode,
     ) -> ParagraphHandle {
         let mut resolved_fonts = ResolvedFonts::default();
-        // SkParagraph's `ParagraphCache` doesn't key on `subpixel` or `font_hinting`: a layout at
-        // another `text_motion` would hit the previous one's cache entry (D2304).
-        if self.last_motion.is_some_and(|previous| previous != style.text_motion) {
-            self.collection.paragraph_cache_mut().reset();
-        }
-        self.last_motion = Some(style.text_motion);
         let mut text_style = self.skia_style_of(&mut resolved_fonts, style, density, blend_mode);
         let mut paragraph_style = ParagraphStyle::new();
         paragraph_style.set_text_style(&text_style);
@@ -871,7 +905,42 @@ impl SkiaTextMeasurer {
                 blend_mode,
             ));
         }
-        let collection = &self.collection;
+        // When `scale_x == 0`, SkParagraph lays the run out at size 0 so glyph advances collapse
+        // to 0; a strut at the paragraph's unscaled size keeps the line's vertical extent (D2425).
+        let has_zero_scale = if runs.is_empty() {
+            horizontal_scale(style) == 0.0
+        } else {
+            runs.iter().any(|(_, run_style, _)| horizontal_scale(run_style) == 0.0)
+        };
+        if has_zero_scale {
+            let font_px = font_px_of(style, density);
+            if font_px > 0.0 {
+                let alias = self.alias_of(&mut resolved_fonts, style);
+                let mut strut = skia_safe::textlayout::StrutStyle::new();
+                let mut names = families(style.font_family.as_ref());
+                if let Some(alias) = alias.as_deref() {
+                    names.insert(0, alias);
+                }
+                strut.set_font_families(&names);
+                strut.set_font_style(skia_font_style(style));
+                strut.set_font_size(font_px);
+                if let Some(line_height) =
+                    compose_ui::platform::resolve_text_unit_px(style.line_height, font_px, density)
+                {
+                    strut.set_height(line_height / font_px);
+                    strut.set_height_override(true);
+                    let alignment = style
+                        .line_height_style
+                        .unwrap_or(compose_ui::LineHeightStyle::DEFAULT)
+                        .alignment;
+                    strut.set_half_leading(alignment == compose_ui::LineHeightAlignment::CENTER);
+                }
+                strut.set_strut_enabled(true);
+                paragraph_style.set_strut_style(strut);
+            }
+        }
+        let collection = self.collection_for(style.text_motion);
+        let collection = &collection;
         // A placeholder's box and how it sits, in the text style around it, by where they start
         // for the builder.
         let shown_placeholders = compose_ui::platform::placeholders_in_text_order(placeholders);
@@ -1342,13 +1411,13 @@ fn skia_text_style(
         }
         text_style.set_decoration_type(kind);
         text_style.set_decoration_color(skia_safe::Color::new(color.to_argb()));
-        if scale_x != 1.0 {
+        if scale_x != 1.0 && scale_x > 0.0 {
             // The font's thickness at its own size, not the scaled one's.
             text_style.set_decoration_thickness_multiplier(1.0 / scale_x);
         }
     }
     if let Some(line_height) = px(style.line_height)
-        && font_px > 0.0
+        && size_px > 0.0
     {
         text_style.set_height(line_height / size_px);
         text_style.set_height_override(true);
@@ -1435,14 +1504,17 @@ fn skia_font_style(style: &TextStyle) -> FontStyle {
     )
 }
 
-/// `style`'s horizontal glyph scale (1 without a geometric transform).
-fn horizontal_scale(style: &TextStyle) -> f32 {
+/// `style`'s signed horizontal glyph scale (1 without a finite geometric transform).
+fn glyph_scale_x(style: &TextStyle) -> f32 {
     match style.text_geometric_transform {
-        Some(transform) if transform.scale_x > 0.0 && transform.scale_x.is_finite() => {
-            transform.scale_x
-        }
+        Some(transform) if transform.scale_x.is_finite() => transform.scale_x,
         _ => 1.0,
     }
+}
+
+/// The non-negative font-size multiplier SkParagraph lays `style` out at (`|scale_x|`, D2425).
+fn horizontal_scale(style: &TextStyle) -> f32 {
+    glyph_scale_x(style).abs()
 }
 
 /// Whether `style`'s glyphs are drawn by compose-skia, scaled or skewed (D2302).
@@ -1456,8 +1528,9 @@ fn is_transformed(style: &TextStyle) -> bool {
 
 /// Whether [`skia_text_style`] needs `style`'s primary font's metrics.
 fn needs_primary_metrics(style: &TextStyle) -> bool {
+    let scale = horizontal_scale(style);
     style.baseline_shift.is_some_and(|shift| shift.is_applicable())
-        || (horizontal_scale(style) != 1.0 && !style.line_height.is_specified())
+        || (scale != 1.0 && scale > 0.0 && !style.line_height.is_specified())
 }
 
 /// The sigma of a blur of `radius`, as Skia converts the radius Android's `setShadowLayer` takes.
@@ -1507,6 +1580,7 @@ fn blended(mut paint: skia_safe::Paint, mode: compose_ui::BlendMode) -> skia_saf
 /// text, by `scale_x` and `skew_x`, with the paint and shadows SkParagraph would have drawn.
 struct HiddenGlyphs {
     range: std::ops::Range<usize>,
+    layout_scale: f32,
     scale_x: f32,
     skew_x: f32,
     paint: skia_safe::Paint,
@@ -1555,7 +1629,8 @@ fn hide_glyphs(
     text_style.reset_shadows();
     HiddenGlyphs {
         range,
-        scale_x: horizontal_scale(style),
+        layout_scale: horizontal_scale(style),
+        scale_x: glyph_scale_x(style),
         skew_x: transform.skew_x,
         paint,
         shadows,
@@ -1574,6 +1649,9 @@ fn transformed_glyphs_of(
         let Some(info) = info else { return };
         let starts = info.utf8_starts();
         for glyphs in hidden {
+            if glyphs.scale_x == 0.0 || glyphs.layout_scale <= 0.0 {
+                continue;
+            }
             picked.clear();
             picked.extend(
                 (0..info.count()).filter(|&index| glyphs.range.contains(&(starts[index] as usize))),
@@ -1582,7 +1660,7 @@ fn transformed_glyphs_of(
                 continue;
             }
             let mut font = info.font().clone();
-            font.set_size(font.size() / glyphs.scale_x);
+            font.set_size(font.size() / glyphs.layout_scale);
             font.set_scale_x(glyphs.scale_x);
             font.set_skew_x(glyphs.skew_x);
             let mut builder = skia_safe::TextBlobBuilder::new();
@@ -1746,5 +1824,36 @@ mod tests {
             &Density::new(1.0),
         );
         assert_eq!(measurer.entry(handle).transformed_glyphs.len(), 1);
+    }
+
+    #[test]
+    fn alternating_text_motions_preserve_paragraph_caches_without_resetting() {
+        let mut measurer = SkiaTextMeasurer::new();
+        assert!(measurer.static_collection.is_none());
+        assert!(measurer.animated_collection.is_none());
+
+        let opts = TextLayoutOptions::default();
+        let c = Constraints::unbounded();
+        let d = Density::new(1.0);
+        let still = TextStyle {
+            font_size: compose_ui::UnitExt::sp(15.0),
+            text_motion: Some(compose_ui::TextMotion::Static),
+            ..TextStyle::DEFAULT
+        };
+        let animated =
+            TextStyle { text_motion: Some(compose_ui::TextMotion::Animated), ..still.clone() };
+        let default = TextStyle { text_motion: None, ..still.clone() };
+
+        let h1 = measurer.layout("First static line", &still, opts, c, &d);
+        let h2 = measurer.layout("Animated title", &animated, opts, c, &d);
+        let h3 = measurer.layout("Second static line", &still, opts, c, &d);
+        let h4 = measurer.layout("Default line", &default, opts, c, &d);
+
+        assert!(measurer.static_collection.as_mut().unwrap().paragraph_cache_mut().count() >= 2);
+        assert!(measurer.animated_collection.as_mut().unwrap().paragraph_cache_mut().count() >= 1);
+        assert!(measurer.collection.paragraph_cache_mut().count() >= 1);
+        for h in [h1, h2, h3, h4] {
+            measurer.release(h);
+        }
     }
 }

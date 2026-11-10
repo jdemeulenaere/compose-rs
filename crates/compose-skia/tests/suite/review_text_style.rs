@@ -93,7 +93,6 @@ fn default_paint(
 }
 
 #[test]
-#[ignore = "review: SkiaTextMeasurer clamps scale_x == 0 to 1.0 instead of collapsing glyph advances and painting nothing"]
 fn zero_scale_x_collapses_glyph_widths_and_paints_no_glyphs_while_keeping_height() {
     let zero = TextGeometricTransform { scale_x: 0.0, skew_x: 0.0 };
     let style = TextStyle { text_geometric_transform: Some(zero), ..sample_style(40.0) };
@@ -164,7 +163,6 @@ fn zero_scale_x_collapses_glyph_widths_and_paints_no_glyphs_while_keeping_height
 }
 
 #[test]
-#[ignore = "review: SkiaTextMeasurer clamps negative scale_x to 1.0 instead of horizontally mirroring glyphs"]
 fn negative_scale_x_mirrors_glyph_horizontally_instead_of_drawing_unscaled() {
     // Sample font glyph 'a' at 40 px is a right-pointing triangle: left edge (x=2, y=20) is filled,
     // right edge (x=38, y=4) is empty. With scale_x = -1.0 around the glyph's origin, it flips!
