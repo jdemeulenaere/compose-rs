@@ -961,7 +961,8 @@ pub(crate) fn AnimatedEnterExit<T: Clone + PartialEq + 'static>(
                 "Built-in",
             );
             let policy = remember(move || {
-                Rc::new(EnterExitMeasurePolicy { target_size }) as Rc<dyn MeasurePolicy>
+                Rc::new(EnterExitMeasurePolicy { target_size, has_lookahead: Cell::new(false) })
+                    as Rc<dyn MeasurePolicy>
             });
             compose_ui::Layout(
                 modifier.then(enter_exit),
@@ -973,9 +974,13 @@ pub(crate) fn AnimatedEnterExit<T: Clone + PartialEq + 'static>(
 }
 
 /// The content's children, stacked at the top start, as large as the largest: their size is the
-/// target size.
+/// target size (in a `LookaheadScope`, their size ahead, as Compose's
+/// `AnimatedEnterExitMeasurePolicy`: D2353).
 struct EnterExitMeasurePolicy {
     target_size: compose_runtime::MutableState<IntSize>,
+    /// Whether it's been measured ahead, as `hasLookaheadOccurred`: then only the pass ahead
+    /// sets the target size.
+    has_lookahead: Cell<bool>,
 }
 
 impl MeasurePolicy for EnterExitMeasurePolicy {
@@ -990,7 +995,12 @@ impl MeasurePolicy for EnterExitMeasurePolicy {
         let size = placeables.iter().fold(IntSize::ZERO, |size, placeable| {
             IntSize::new(size.width.max(placeable.width), size.height.max(placeable.height))
         });
-        self.target_size.set(size);
+        if scope.is_looking_ahead() {
+            self.has_lookahead.set(true);
+            self.target_size.set(size);
+        } else if !self.has_lookahead.get() {
+            self.target_size.set(size);
+        }
         for placeable in &placeables {
             scope.place(placeable, 0, 0);
         }

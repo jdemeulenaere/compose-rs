@@ -81,6 +81,12 @@ struct ContentSizeNode {
     listener: Option<FinishedListener>,
     data: Option<AnimData>,
     scope: compose_runtime::Owned<CoroutineScope>,
+    /// The content's size ahead, in a `LookaheadScope`: what the size animates to, as Compose's
+    /// `lookaheadSize` (none until measured ahead, and again once attached).
+    lookahead_size: Option<IntSize>,
+    /// The constraints it was measured with ahead, as `lookaheadConstraints`: the content is
+    /// measured with them now too, so that it isn't laid out again while the size animates.
+    lookahead_constraints: Option<Constraints>,
 }
 
 impl ModifierNodeElement for ContentSizeElement {
@@ -92,6 +98,8 @@ impl ModifierNodeElement for ContentSizeElement {
             listener: self.listener.clone(),
             data: None,
             scope: CoroutineScope::new(),
+            lookahead_size: None,
+            lookahead_constraints: None,
         }
     }
 
@@ -119,6 +127,13 @@ impl ModifierNodeElement for ContentSizeElement {
 impl ModifierNode for ContentSizeNode {
     fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
         Some(self)
+    }
+
+    /// Attached (again), it may be in a tree with no `LookaheadScope`: nothing's known ahead, as
+    /// Compose's `onAttach`.
+    fn on_attach(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
+        self.lookahead_size = None;
+        self.lookahead_constraints = None;
     }
 
     /// Detached (left, deactivated or reused): its animation stops, as with Compose's node
@@ -173,9 +188,23 @@ impl LayoutModifierNode for ContentSizeNode {
         content: Measurable,
         constraints: Constraints,
     ) -> MeasureResult {
-        let placeable = scope.measure(content, constraints);
+        let looking_ahead = scope.is_looking_ahead();
+        let placeable = if looking_ahead {
+            self.lookahead_constraints = Some(constraints);
+            scope.measure(content, constraints)
+        } else {
+            // With the constraints of ahead when there are, as Compose's `targetConstraints`.
+            scope.measure(content, self.lookahead_constraints.unwrap_or(constraints))
+        };
         let measured = placeable.size();
-        let size = constraints.constrain(self.animate_to(measured));
+        // Ahead, in a `LookaheadScope`, the content's size at once, kept as what the size
+        // animates to now, as Compose's `SizeAnimationModifierNode.measure` (D2351).
+        let size = if looking_ahead {
+            self.lookahead_size = Some(measured);
+            measured
+        } else {
+            constraints.constrain(self.animate_to(self.lookahead_size.unwrap_or(measured)))
+        };
         let offset = self.alignment.align(measured, size, scope.layout_direction());
         scope.place_at(&placeable, offset);
         scope.layout(size.width, size.height)
