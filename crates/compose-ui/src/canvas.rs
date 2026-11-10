@@ -6,20 +6,31 @@ use std::sync::{Arc, RwLock};
 
 use crate::alignment::LayoutDirection;
 use crate::color_filter::{BlendMode, ColorFilter};
+use crate::colorspace::ColorSpace;
 use crate::display_list::{DisplayList, DrawOp};
 use crate::draw::DrawScope;
 use crate::graphics::{Color, Paint, PaintStyle, StrokeCap};
-use crate::image::ImageBitmap;
+use crate::image::{ImageBitmap, ImageBitmapConfig};
 use crate::path::Path;
 use crate::unit::{Density, IntOffset, IntSize, Offset, Rect, Size};
 
 /// Draws display lists into bitmaps' pixels: the platform's, set once by the host
 /// ([`set_bitmap_rasterizer`]), as the image decoder is.
 pub trait BitmapRasterizer: Send + Sync {
-    /// Draws `list`'s operations over `pixels` (premultiplied RGBA, `width` × `height`, a row
-    /// after another), in place. Its paragraphs aren't drawn: a bitmap's canvas has no text
-    /// measurer.
-    fn draw(&self, list: &DisplayList, width: u32, height: u32, pixels: &mut [u8]);
+    /// Draws `list`'s operations over `pixels` (`width` × `height`, encoded as `config`, `has_alpha`,
+    /// `color_space`, a row after another), in place. Its paragraphs aren't drawn: a bitmap's
+    /// canvas has no text measurer.
+    #[allow(clippy::too_many_arguments)]
+    fn draw(
+        &self,
+        list: &DisplayList,
+        width: u32,
+        height: u32,
+        config: ImageBitmapConfig,
+        has_alpha: bool,
+        color_space: &ColorSpace,
+        pixels: &mut [u8],
+    );
 }
 
 static RASTERIZER: RwLock<Option<Arc<dyn BitmapRasterizer>>> = RwLock::new(None);
@@ -35,7 +46,7 @@ pub(crate) fn rasterizer() -> Option<Arc<dyn BitmapRasterizer>> {
 }
 
 /// The shaders and color filters a list of operations names.
-type Tables<'a> = (&'a [crate::brush::Shader], &'a [ColorFilter]);
+type Tables<'a> = (&'a [crate::brush::PaintShader], &'a [ColorFilter]);
 
 /// Gives `op` the shaders and color filters it names in `from`, as entries of `into`'s tables;
 /// and a drawing of a bitmap drawn into, a snapshot of its pixels now (what it reads, drawn
@@ -44,7 +55,7 @@ fn adopt(op: &mut DrawOp, from: Tables<'_>, into: &mut DisplayList) {
     if let Some(paint) = op.paint_mut()
         && let Some(shader) = paint.shader
     {
-        paint.shader = Some(into.push_shader(from.0[shader.index()].clone()));
+        paint.shader = Some(into.push_shader(from.0[shader.index()].snapshot()));
     }
     if let Some(filter) = op.color_filter_mut()
         && let Some(index) = *filter
@@ -352,6 +363,7 @@ impl Canvas {
             dst: Rect::new(top_left.x, top_left.y, top_left.x + width, top_left.y + height),
             alpha: paint.color.alpha(),
             color_filter: paint.color_filter(),
+            filter_quality: crate::image::FilterQuality::Low,
         });
     }
 
@@ -380,6 +392,7 @@ impl Canvas {
             dst: rect(dst_offset, dst_size),
             alpha: paint.color.alpha(),
             color_filter: paint.color_filter(),
+            filter_quality: crate::image::FilterQuality::Low,
         });
     }
 
@@ -407,12 +420,22 @@ impl Canvas {
     /// read: after its last ones, in their save, if they're this canvas's in the same state;
     /// else in a save of their own after the state.
     fn submit(&mut self, mut ops: Vec<DrawOp>, from: Tables<'_>) {
-        // A drawn bitmap's pixels are read (this one's too) before its lock is taken.
+        // A drawn bitmap's pixels are read (this one's too) before its lock is taken: an image
+        // shader's too.
         for op in &mut ops {
             if let DrawOp::DrawImage { image, .. } = op {
                 *image = image.snapshot();
             }
         }
+        let snapshots: Option<Vec<crate::brush::PaintShader>> = from
+            .0
+            .iter()
+            .any(|shader| shader.shader.has_image())
+            .then(|| from.0.iter().map(crate::brush::PaintShader::snapshot).collect());
+        let from = match &snapshots {
+            Some(shaders) => (&shaders[..], from.1),
+            None => from,
+        };
         let key = (self.id, self.version);
         let frames = &self.frames;
         self.image.with_drawing(|drawing| {

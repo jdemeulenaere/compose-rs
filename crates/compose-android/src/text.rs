@@ -834,7 +834,7 @@ fn paint_of(style: &TextStyle) -> (u32, u8) {
 fn paint_extras_flags(style: &TextStyle) -> u8 {
     let gradient = matches!(
         style.foreground(),
-        compose_ui::TextForegroundStyle::Brush { brush, .. } if !matches!(brush, Brush::Solid(_))
+        compose_ui::TextForegroundStyle::Brush { brush, .. } if matches!(brush, Brush::Linear { .. } | Brush::Radial { .. } | Brush::Sweep { .. })
     );
     u8::from(gradient) << 2
         | u8::from(style.shadow.is_some()) << 3
@@ -869,7 +869,7 @@ fn encode_paint_extras(out: &mut Writer, style: &TextStyle, flags: u8) {
                 (1, gradient, [center.x, center.y, *radius, 0.0])
             }
             Brush::Sweep { gradient, center } => (2, gradient, [center.x, center.y, 0.0, 0.0]),
-            Brush::Solid(_) => unreachable!("a solid brush is a color"),
+            Brush::Solid(_) | Brush::Shader(_) => unreachable!("a solid brush is a color"),
         };
         out.u8(kind);
         out.u8(match gradient.tile_mode {

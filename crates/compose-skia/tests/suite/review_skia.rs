@@ -34,6 +34,7 @@ fn a_part_of_a_bitmap_is_sampled_within_its_source_rect() {
             dst: Rect::new(0.0, 0.0, 100.0, 100.0),
             alpha: 1.0,
             color_filter: None,
+            filter_quality: compose::ui::FilterQuality::Low,
         }],
         100,
     );
@@ -52,6 +53,7 @@ fn a_tinted_bitmap_is_all_of_its_tint() {
         dst: Rect::new(0.0, 0.0, 100.0, 100.0),
         alpha: 1.0,
         color_filter: Some(tint),
+        filter_quality: compose::ui::FilterQuality::Low,
     });
     let mut renderer = RasterRenderer::new(100, 100);
     renderer.render(&list, Color::WHITE, 1.0, &FixedTextMeasurer::default());
@@ -75,6 +77,7 @@ fn edge_case_images_draw_and_decode() {
                 dst: Rect::new(0.0, 0.0, 10.0, 10.0),
                 alpha: 1.0,
                 color_filter: None,
+                filter_quality: compose::ui::FilterQuality::Low,
             },
             DrawOp::DrawImage {
                 image: image.clone(),
@@ -82,6 +85,7 @@ fn edge_case_images_draw_and_decode() {
                 dst: Rect::new(0.0, 20.0, 20.0, 30.0),
                 alpha: 7.0,
                 color_filter: None,
+                filter_quality: compose::ui::FilterQuality::Low,
             },
             DrawOp::DrawImage {
                 image: image.clone(),
@@ -89,6 +93,7 @@ fn edge_case_images_draw_and_decode() {
                 dst: Rect::new(0.0, 40.0, 20.0, 50.0),
                 alpha: -1.0,
                 color_filter: None,
+                filter_quality: compose::ui::FilterQuality::Low,
             },
         ],
         100,
@@ -107,6 +112,7 @@ fn edge_case_images_draw_and_decode() {
             dst: Rect::new(0.0, 0.0, 10.0, 10.0),
             alpha: 1.0,
             color_filter: None,
+            filter_quality: compose::ui::FilterQuality::Low,
         }],
         10,
     );

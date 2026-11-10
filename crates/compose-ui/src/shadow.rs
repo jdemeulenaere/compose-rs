@@ -150,7 +150,8 @@ impl compose_runtime::ComposeArg for Shadow {
 }
 
 /// Between `start` and `stop`, as Compose's `shadow.lerp`: a missing end is the other one,
-/// transparent; brushes switch halfway, as the blend mode.
+/// transparent and without a brush; brushes interpolate as `Interpolatable.lerp` does
+/// ([`Brush::lerp`](crate::Brush::lerp), D2402); the blend mode switches halfway.
 pub fn lerp(start: Option<&Shadow>, stop: Option<&Shadow>, fraction: f32) -> Option<Shadow> {
     let transparent =
         |shadow: &Shadow| Shadow { color: Color::TRANSPARENT, brush: None, ..shadow.clone() };
@@ -167,7 +168,7 @@ pub fn lerp(start: Option<&Shadow>, stop: Option<&Shadow>, fraction: f32) -> Opt
         spread: dp(start.spread, stop.spread),
         offset: DpOffset::lerp(start.offset, stop.offset, fraction),
         color: Color::lerp(start.color, stop.color, fraction),
-        brush: if start.brush == stop.brush || half { start.brush } else { stop.brush },
+        brush: crate::brush::Brush::lerp(start.brush.as_ref(), stop.brush.as_ref(), fraction),
         alpha: crate::unit::lerp_f32(start.alpha, stop.alpha, fraction),
         blend_mode: if half { start.blend_mode } else { stop.blend_mode },
     })

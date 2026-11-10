@@ -56,7 +56,8 @@ pub fn BitmapIcon(
         compose_ui::Alignment::CENTER,
         compose_foundation::ContentScale::Fit,
         1.0,
-        tint.is_specified().then_some(tint),
+        tint.is_specified().then_some(tint).map(compose_ui::ColorFilter::tint),
+        compose_ui::FilterQuality::Low,
     );
 }
 

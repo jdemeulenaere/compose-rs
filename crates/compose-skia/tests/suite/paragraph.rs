@@ -10,7 +10,7 @@ use compose::ui::{
     AnnotatedRange, BaselineShift, BlendMode, Brush, Color, Constraints, Density, DrawScope,
     DrawStyle, Font, FontFamily, FontLoadingStrategy, FontOptions, FontStyle, FontWeight,
     LOCAL_FONT_FAMILY_RESOLVER, LocaleList, Offset, Paint, Paragraph, PlatformTextStyle, Rect,
-    ResolvedTextDirection, Shadow, SpanStyle, Stroke, StrokeCap, StrokeJoin, TextDecoration,
+    ResolvedTextDirection, Shadow, Size, SpanStyle, Stroke, StrokeCap, StrokeJoin, TextDecoration,
     TextDirection, TextGeometricTransform, TextMotion, TextOverflow, TextRange, TextStyle,
     Typeface, TypefaceLoader, UnitExt, paragraph_of_text,
     platform::{
@@ -1703,4 +1703,41 @@ fn font_padding_and_tall_font_metrics_on_skia_and_fixed_measurers() {
             layout(&mut fixed, &latin, text, false).height()
         );
     }
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, shaderBrushSpan_createsShaderOnlyOnce
+#[test]
+fn shader_brush_span_creates_shader_only_once() {
+    use compose::ui::{CustomShaderBrush, Shader, ShaderBrush, TileMode};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Clone)]
+    struct CountingSpanBrush(Arc<AtomicUsize>);
+
+    impl CustomShaderBrush for CountingSpanBrush {
+        fn create_shader(&self, size: Size) -> Shader {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Shader::linear_gradient(
+                Offset::ZERO,
+                Offset::new(size.width.max(1.0), size.height.max(1.0)),
+                [Color::RED, Color::BLUE],
+                TileMode::Clamp,
+            )
+        }
+    }
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_for_draw = calls.clone();
+    let brush = Brush::from(ShaderBrush::custom(CountingSpanBrush(calls.clone())));
+    let span = AnnotatedRange::new(SpanStyle::DEFAULT.with_brush(Some(brush), 1.0), 0, 3);
+    let _ = draw_with((120, 50), (120, 50), 1.0, 0, move |scope, _| {
+        let paragraph =
+            laid_out_in_scope(scope, "abc", &sample_style(40.0), std::slice::from_ref(&span), 120);
+        for _ in 0..5 {
+            paragraph.paint(scope, Color::UNSPECIFIED, None, None, None, BlendMode::SrcOver);
+        }
+        assert_eq!(calls_for_draw.load(Ordering::Relaxed), 1);
+    });
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
 }

@@ -18,10 +18,10 @@ The log is split by area into the files below, one table each, rows in number or
 | File | Covers | Rows |
 |---|---|---|
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 186 |
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 496 |
+| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 505 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 169 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 124 |
-| [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 34 |
+| [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 36 |
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 31 |
 | [desktop](decisions/desktop.md) | The desktop host: window, Skia rendering, input and events. | 6 |
 | [benchmarks](decisions/benchmarks.md) | The benchmark apps, protocols and rounds, and how results are read. | 35 |
@@ -1033,8 +1033,8 @@ The log is split by area into the files below, one table each, rows in number or
 | D1687 | [ui-and-layout](decisions/ui-and-layout.md#d1687) | revised by [D1688](decisions/ui-and-layout.md#d1688) |
 | D1688 | [ui-and-layout](decisions/ui-and-layout.md#d1688) | revised by [D1689](decisions/ui-and-layout.md#d1689) |
 | D1689 | [ui-and-layout](decisions/ui-and-layout.md#d1689) | current |
-| D1900 | [android-drawing](decisions/android-drawing.md#d1900) | current |
-| D1901 | [ui-and-layout](decisions/ui-and-layout.md#d1901) | current |
+| D1900 | [android-drawing](decisions/android-drawing.md#d1900) | revised by [D2403](decisions/ui-and-layout.md#d2403) |
+| D1901 | [ui-and-layout](decisions/ui-and-layout.md#d1901) | revised by [D2401](decisions/ui-and-layout.md#d2401), [D2403](decisions/ui-and-layout.md#d2403) |
 | D1902 | [ui-and-layout](decisions/ui-and-layout.md#d1902) | current |
 | D1903 | [ui-and-layout](decisions/ui-and-layout.md#d1903) | revised by [D1909](decisions/ui-and-layout.md#d1909), [D1331](decisions/ui-and-layout.md#d1331) |
 | D1904 | [android-drawing](decisions/android-drawing.md#d1904) | current |
@@ -1046,9 +1046,9 @@ The log is split by area into the files below, one table each, rows in number or
 | D1910 | [ui-and-layout](decisions/ui-and-layout.md#d1910) | current |
 | D1911 | [ui-and-layout](decisions/ui-and-layout.md#d1911) | current |
 | D1912 | [android-drawing](decisions/android-drawing.md#d1912) | revised by [D1915](decisions/android-drawing.md#d1915) |
-| D1913 | [ui-and-layout](decisions/ui-and-layout.md#d1913) | revised by [D1914](decisions/ui-and-layout.md#d1914), [D1915](decisions/android-drawing.md#d1915), [D1916](decisions/ui-and-layout.md#d1916) |
+| D1913 | [ui-and-layout](decisions/ui-and-layout.md#d1913) | revised by [D1914](decisions/ui-and-layout.md#d1914), [D1915](decisions/android-drawing.md#d1915), [D1916](decisions/ui-and-layout.md#d1916), [D2404](decisions/ui-and-layout.md#d2404) |
 | D1914 | [ui-and-layout](decisions/ui-and-layout.md#d1914) | current |
-| D1915 | [android-drawing](decisions/android-drawing.md#d1915) | current |
+| D1915 | [android-drawing](decisions/android-drawing.md#d1915) | revised by [D2405](decisions/android-drawing.md#d2405) |
 | D1916 | [ui-and-layout](decisions/ui-and-layout.md#d1916) | current |
 | D1917 | [ui-and-layout](decisions/ui-and-layout.md#d1917) | revised by [D1920](decisions/ui-and-layout.md#d1920) |
 | D1918 | [ui-and-layout](decisions/ui-and-layout.md#d1918) | revised by [D1921](decisions/ui-and-layout.md#d1921), [D1922](decisions/ui-and-layout.md#d1922), [D1478](decisions/lazy-and-prefetch.md#d1478) |
@@ -1187,11 +1187,22 @@ The log is split by area into the files below, one table each, rows in number or
 | D2361 | [ui-and-layout](decisions/ui-and-layout.md#d2361) | revised by [D2436](decisions/ui-and-layout.md#d2436) |
 | D2362 | [ui-and-layout](decisions/ui-and-layout.md#d2362) | revised by [D2435](decisions/ui-and-layout.md#d2435) |
 | D2363 | [ui-and-layout](decisions/ui-and-layout.md#d2363) | revised by [D2435](decisions/ui-and-layout.md#d2435) |
+| D2400 | [ui-and-layout](decisions/ui-and-layout.md#d2400) | revised by [D2432](decisions/ui-and-layout.md#d2432), [D2433](decisions/ui-and-layout.md#d2433) |
+| D2401 | [ui-and-layout](decisions/ui-and-layout.md#d2401) | revised by [D2433](decisions/ui-and-layout.md#d2433) |
+| D2402 | [ui-and-layout](decisions/ui-and-layout.md#d2402) | revised by [D2433](decisions/ui-and-layout.md#d2433) |
+| D2403 | [ui-and-layout](decisions/ui-and-layout.md#d2403) | current |
+| D2404 | [ui-and-layout](decisions/ui-and-layout.md#d2404) | revised by [D2432](decisions/ui-and-layout.md#d2432) |
+| D2405 | [android-drawing](decisions/android-drawing.md#d2405) | revised by [D2431](decisions/android-drawing.md#d2431) |
+| D2406 | [ui-and-layout](decisions/ui-and-layout.md#d2406) | revised by [D2430](decisions/ui-and-layout.md#d2430) |
 | D2420 | [ui-and-layout](decisions/ui-and-layout.md#d2420) | current |
 | D2421 | [ui-and-layout](decisions/ui-and-layout.md#d2421) | current |
 | D2425 | [text](decisions/text.md#d2425) | current |
 | D2426 | [text](decisions/text.md#d2426) | current |
 | D2427 | [text](decisions/text.md#d2427) | current |
+| D2430 | [ui-and-layout](decisions/ui-and-layout.md#d2430) | current |
+| D2431 | [android-drawing](decisions/android-drawing.md#d2431) | current |
+| D2432 | [ui-and-layout](decisions/ui-and-layout.md#d2432) | current |
+| D2433 | [ui-and-layout](decisions/ui-and-layout.md#d2433) | current |
 | D2435 | [ui-and-layout](decisions/ui-and-layout.md#d2435) | current |
 | D2436 | [ui-and-layout](decisions/ui-and-layout.md#d2436) | current |
 | D2440 | [ui-and-layout](decisions/ui-and-layout.md#d2440) | current |

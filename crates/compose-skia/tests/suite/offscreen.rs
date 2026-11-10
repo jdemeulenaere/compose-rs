@@ -291,6 +291,7 @@ fn a_bitmap_drawn_into_again_is_drawn_anew() {
         dst: rect,
         alpha: 1.0,
         color_filter: None,
+        filter_quality: compose::ui::FilterQuality::Low,
     };
     list.push(draw);
     let mut renderer = compose_skia::RasterRenderer::new(4, 4);
@@ -506,4 +507,94 @@ fn a_bitmap_drawn_into_itself_reads_its_pixels_then() {
     let map = image.to_pixel_map();
     let colors = (map.get(1, 1), map.get(2, 1), map.get(3, 0));
     assert_eq!(colors, (Color::BLUE, Color::RED, Color::RED));
+}
+
+// Compose: compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/drawscope/DrawScopeTest.kt, testBrushResetOnSubsequentDrawWithAlphaBitmap
+#[test]
+fn draw_scope_resets_brush_when_drawing_alpha8_bitmap() {
+    use compose::ui::{Brush, PaintStyle};
+
+    install();
+    let width = 200u32;
+    let height = 200u32;
+    let brush = Brush::horizontal_gradient([Color::TRANSPARENT, Color::BLUE, Color::TRANSPARENT]);
+    let mask = ImageBitmap::new_with(
+        width / 2,
+        height / 2,
+        ImageBitmapConfig::Alpha8,
+        true,
+        &ColorSpaces::SRGB,
+    );
+    {
+        let mut mask_canvas = Canvas::new(&mask);
+        mask_canvas
+            .draw_rect(Rect::new(0.0, 0.0, width as f32, height as f32), Paint::fill(Color::GREEN));
+    }
+    let filter = ColorFilter::tint(Color::RED);
+    let draw_scene = |out: &ImageBitmap| {
+        let mut canvas = Canvas::new(out);
+        CanvasDrawScope::draw(
+            &mut canvas,
+            Density::new(1.0),
+            LayoutDirection::Ltr,
+            Size::new(width as f32, height as f32),
+            |scope| {
+                let paint = scope.brush_paint(&brush, 1.0, PaintStyle::Fill);
+                scope.draw_rect(scope.bounds(), paint);
+                scope.draw_image_filtered(
+                    &mask,
+                    Rect::new(0.0, 0.0, (width / 2) as f32, (height / 2) as f32),
+                    Rect::new(
+                        width as f32 / 4.0,
+                        height as f32 / 4.0,
+                        width as f32 * 0.75,
+                        height as f32 * 0.75,
+                    ),
+                    1.0,
+                    Some(&filter),
+                );
+            },
+        );
+    };
+    let out = ImageBitmap::new(width, height);
+    draw_scene(&out);
+    let map = out.to_pixel_map();
+    // Outside mask: gradient corners transparent, middle blue; inside mask: tinted red, not gradient.
+    assert!(map.get(0, 10).alpha() <= 0.02, "{:?}", map.get(0, 10));
+    let top_mid = map.get(width as i32 / 2, 10);
+    assert_eq!((top_mid.to_argb() & 0x00FF_FFFF), 0x0000_00FF, "{top_mid:?}");
+    assert!(top_mid.alpha() >= 0.99, "{top_mid:?}");
+    assert_eq!(map.get(width as i32 / 2, height as i32 / 2), Color::RED);
+}
+
+#[test]
+fn bitmap_configs_and_color_spaces_round_trip() {
+    install();
+    // Alpha8 preserves alpha and snapshots cleanly.
+    let alpha = ImageBitmap::new_with(4, 4, ImageBitmapConfig::Alpha8, true, &ColorSpaces::SRGB);
+    Canvas::new(&alpha)
+        .draw_rect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::from_argb(0x80FF0000)));
+    assert_eq!(alpha.pixels().len(), 16);
+    assert!((alpha.color(1, 1).alpha() - 0.5).abs() < 0.02);
+    assert_eq!(alpha.to_pixel_map().get(1, 1), Color::from_argb(0x80000000));
+
+    // Rgb565 draws opaque 16-bit RGB colors.
+    let rgb565 = ImageBitmap::new_with(4, 4, ImageBitmapConfig::Rgb565, false, &ColorSpaces::SRGB);
+    Canvas::new(&rgb565).draw_rect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::RED));
+    assert_eq!(rgb565.pixels().len(), 32);
+    assert_eq!(rgb565.color(2, 2), Color::RED);
+
+    // DisplayP3 Argb8888 keeps P3 values in P3 space and draws accurately onto an sRGB canvas.
+    let p3_red = Color::new_with(1.0, 0.0, 0.0, 1.0, &ColorSpaces::DISPLAY_P3);
+    let p3_bmp =
+        ImageBitmap::new_with(4, 4, ImageBitmapConfig::Argb8888, true, &ColorSpaces::DISPLAY_P3);
+    Canvas::new(&p3_bmp).draw_rect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(p3_red));
+    let got = p3_bmp.color(1, 1);
+    assert_eq!(*got.color_space(), ColorSpaces::DISPLAY_P3);
+    assert!((got.red() - 1.0).abs() < 0.02 && got.green().abs() < 0.02, "{got:?}");
+
+    // Drawing the DisplayP3 bitmap onto another canvas preserves its red tint without shift.
+    let target = ImageBitmap::new(4, 4);
+    Canvas::new(&target).draw_image(&p3_bmp, Offset::ZERO, Paint::fill(Color::BLACK));
+    assert_eq!(target.to_pixel_map().get(1, 1), p3_red.convert(&ColorSpaces::SRGB));
 }

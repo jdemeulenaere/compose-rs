@@ -1,9 +1,6 @@
 //! Compose's `BasicTextBrushTest` (foundation, device tests): a `BasicText` whose style's brush
-//! is toggled draws in the new brush, solid or a gradient, drawn by Skia in the sample font (as
-//! Compose's test font) and checked for the colors its pixels hold.
-//!
-//! `toggleCustomShaderBrush` waits on a custom `ShaderBrush` (a brush making its own shader,
-//! reading state as it does): compose-rs's `Brush` is solid or one of the gradients.
+//! is toggled (solid, gradient, or custom `ShaderBrush`) draws in the new brush, drawn by Skia
+//! in the sample font (as Compose's test font) and checked for the colors its pixels hold.
 
 use compose::foundation::*;
 use compose::runtime::*;
@@ -70,4 +67,97 @@ fn toggle_predefined_shader_brush() {
         Brush::horizontal_gradient([Color::RED, Color::RED]),
         Brush::horizontal_gradient([Color::BLUE, Color::BLUE]),
     );
+}
+
+#[derive(Clone)]
+struct ToggleBrush(compose::runtime::State<bool>);
+
+impl compose::ui::CustomShaderBrush for ToggleBrush {
+    fn create_shader(&self, size: compose::ui::Size) -> compose::ui::Shader {
+        let color = if self.0.get() { Color::RED } else { Color::BLUE };
+        compose::ui::Shader::linear_gradient(
+            compose::ui::Offset::ZERO,
+            compose::ui::Offset::new(size.width.max(1.0), 0.0),
+            [color, color],
+            compose::ui::TileMode::Clamp,
+        )
+    }
+
+    fn same(&self, other: &dyn compose::ui::CustomShaderBrush) -> bool {
+        other.downcast_ref::<ToggleBrush>().is_some()
+    }
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/text/BasicTextBrushTest.kt, toggleCustomShaderBrush
+#[test]
+fn toggle_custom_shader_brush() {
+    use compose::ui::{AnnotatedRange, AnnotatedString, Annotation, ShaderBrush, SpanStyle};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    set_capture_renderer(compose_skia::raster_colors);
+    let is_red = mutable_state_of(true);
+    let handle = is_red.as_state();
+    let brush: Brush = ShaderBrush::custom(ToggleBrush(handle)).into();
+    let recompositions = Rc::new(Cell::new(0usize));
+    let recompositions_count = recompositions.clone();
+    let mut ui = compose_test_with(
+        IntSize::new(400, 200),
+        Density::new(1.0),
+        std::boxed::Box::new(SkiaTextMeasurer::new()),
+        move || {
+            recompositions_count.set(recompositions_count.get() + 1);
+            BasicText!(
+                "Hello",
+                style = TextStyle {
+                    brush: Some(brush.clone()),
+                    font_family: Some(basic_measure_font().to_font_family()),
+                    font_size: 20.sp(),
+                    ..TextStyle::DEFAULT
+                },
+                modifier = Modifier.background(Color::BLACK).test_tag(TAG),
+            );
+        },
+    );
+    ui.wait_for_idle();
+    assert_colors(&mut ui, Color::RED, Color::BLUE);
+    assert_eq!(recompositions.get(), 1);
+    is_red.set(false);
+    ui.wait_for_idle();
+    assert_colors(&mut ui, Color::BLUE, Color::RED);
+    // State is read during draw (`Observation::Draw`), without recomposing.
+    assert_eq!(recompositions.get(), 1);
+
+    // Also works when custom ShaderBrush is placed inside a SpanStyle on AnnotatedString.
+    let span_red = mutable_state_of(true);
+    let span_brush: Brush = ShaderBrush::custom(ToggleBrush(span_red.as_state())).into();
+    let text = AnnotatedString::with_annotations(
+        "Hello",
+        vec![AnnotatedRange::new(
+            Annotation::SpanStyle(SpanStyle::DEFAULT.with_brush(Some(span_brush), 1.0)),
+            0,
+            5,
+        )],
+    );
+    let mut span_ui = compose_test_with(
+        IntSize::new(400, 200),
+        Density::new(1.0),
+        std::boxed::Box::new(SkiaTextMeasurer::new()),
+        move || {
+            BasicAnnotatedText!(
+                text.clone(),
+                style = TextStyle {
+                    font_family: Some(basic_measure_font().to_font_family()),
+                    font_size: 20.sp(),
+                    ..TextStyle::DEFAULT
+                },
+                modifier = Modifier.background(Color::BLACK).test_tag(TAG),
+            );
+        },
+    );
+    span_ui.wait_for_idle();
+    assert_colors(&mut span_ui, Color::RED, Color::BLUE);
+    span_red.set(false);
+    span_ui.wait_for_idle();
+    assert_colors(&mut span_ui, Color::BLUE, Color::RED);
 }

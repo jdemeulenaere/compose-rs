@@ -117,6 +117,7 @@ fn text_images_and_shadows_have_no_extent() {
         dst: Rect::new(0.0, 0.0, 4.0, 4.0),
         alpha: 1.0,
         color_filter: None,
+        filter_quality: compose_ui::FilterQuality::Low,
     };
     assert_eq!(extent(vec![image]), None);
     let shadow = DrawOp::DrawShadow {

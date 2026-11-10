@@ -2,7 +2,7 @@
 
 use compose_runtime::composable;
 use compose_ui::{
-    Alignment, Constraints, DrawModifierNode, DrawScope, ImageBitmap, IntSize,
+    Alignment, ColorFilter, Constraints, DrawModifierNode, DrawScope, ImageBitmap, IntSize,
     IntrinsicMeasureScope, LayoutModifierNode, Measurable, MeasureResult, MeasureScope, Modifier,
     ModifierNode, ModifierNodeElement, Rect, Role, SemanticsConfiguration, SemanticsModifierNode,
     Size,
@@ -10,11 +10,13 @@ use compose_ui::{
 
 /// How an image's size maps to its node's: compose-ui's, as Compose's `ContentScale`.
 pub use compose_ui::ContentScale;
+/// How a scaled bitmap is sampled: compose-ui's, as Compose's `FilterQuality`.
+pub use compose_ui::FilterQuality;
 
 /// A bitmap, as Compose's `Image(bitmap, contentDescription, …)`: its pixels' size within the
 /// constraints, scaled by `content_scale` (a `FillWidth` banner as tall as its scaled width),
 /// drawn scaled by `content_scale` and placed by `alignment` in its node, clipped to it. `content_description` is what accessibility reads;
-/// `None` for decoration. `tint` draws its pixels all in that color, as `ColorFilter.tint`.
+/// `None` for decoration. `color_filter` filters its pixels; `filter_quality` controls sampling.
 #[composable]
 #[allow(non_snake_case)]
 pub fn Image(
@@ -24,10 +26,18 @@ pub fn Image(
     #[default(crate::Alignment::CENTER)] alignment: Alignment,
     #[default(crate::ContentScale::Fit)] content_scale: ContentScale,
     #[default(1.0)] alpha: f32,
-    #[default(None)] tint: Option<compose_ui::Color>,
+    #[default(None)] color_filter: Option<ColorFilter>,
+    #[default(crate::FilterQuality::Low)] filter_quality: FilterQuality,
 ) {
-    let element =
-        ImageElement { bitmap, content_description, alignment, content_scale, alpha, tint };
+    let element = ImageElement {
+        bitmap,
+        content_description,
+        alignment,
+        content_scale,
+        alpha,
+        color_filter,
+        filter_quality,
+    };
     compose_ui::Layout(
         modifier.then_custom(element),
         compose_ui::empty_measure_policy(),
@@ -103,7 +113,8 @@ struct ImageElement {
     alignment: Alignment,
     content_scale: ContentScale,
     alpha: f32,
-    tint: Option<compose_ui::Color>,
+    color_filter: Option<ColorFilter>,
+    filter_quality: FilterQuality,
 }
 
 struct ImageNode {
@@ -112,7 +123,8 @@ struct ImageNode {
     alignment: Alignment,
     content_scale: ContentScale,
     alpha: f32,
-    tint: Option<compose_ui::Color>,
+    color_filter: Option<ColorFilter>,
+    filter_quality: FilterQuality,
 }
 
 impl ModifierNodeElement for ImageElement {
@@ -124,7 +136,8 @@ impl ModifierNodeElement for ImageElement {
             alignment: self.alignment,
             content_scale: self.content_scale,
             alpha: self.alpha,
-            tint: self.tint,
+            color_filter: self.color_filter,
+            filter_quality: self.filter_quality,
         }
     }
 
@@ -134,7 +147,8 @@ impl ModifierNodeElement for ImageElement {
         node.alignment = self.alignment;
         node.content_scale = self.content_scale;
         node.alpha = self.alpha;
-        node.tint = self.tint;
+        node.color_filter = self.color_filter;
+        node.filter_quality = self.filter_quality;
     }
 
     fn same(&self, other: &Self) -> bool {
@@ -143,7 +157,8 @@ impl ModifierNodeElement for ImageElement {
             && other.alignment == self.alignment
             && other.content_scale == self.content_scale
             && other.alpha == self.alpha
-            && other.tint == self.tint
+            && other.color_filter == self.color_filter
+            && other.filter_quality == self.filter_quality
     }
 
     fn name(&self) -> &'static str {
@@ -285,7 +300,7 @@ impl DrawModifierNode for ImageNode {
             bounds.width,
             bounds.height,
         )));
-        scope.draw_image_tinted(
+        scope.draw_image_with(
             &self.bitmap,
             Rect::new(0.0, 0.0, source.width, source.height),
             Rect::new(
@@ -295,7 +310,8 @@ impl DrawModifierNode for ImageNode {
                 (at.y + drawn.height) as f32,
             ),
             self.alpha,
-            self.tint,
+            self.color_filter.as_ref(),
+            self.filter_quality,
         );
         scope.restore();
     }

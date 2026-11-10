@@ -700,3 +700,148 @@ fn a_bitmap_painter_draws_the_part_of_its_bitmap_asked_for() {
         assert!(made.is_err(), "{offset:?} {size:?}");
     }
 }
+
+fn diagonal_sample_bitmap() -> ImageBitmap {
+    compose::ui::platform::set_bitmap_rasterizer(std::sync::Arc::new(
+        compose_skia::SkiaBitmapRasterizer,
+    ));
+    let sample = ImageBitmap::new(3, 3);
+    let mut canvas = compose::ui::canvas::Canvas::new(&sample);
+    canvas.draw_rect(compose::ui::Rect::new(0.0, 0.0, 3.0, 3.0), Paint::fill(Color::WHITE));
+    canvas.draw_rect(compose::ui::Rect::new(0.0, 0.0, 1.0, 1.0), Paint::fill(Color::RED));
+    canvas.draw_rect(compose::ui::Rect::new(1.0, 1.0, 2.0, 2.0), Paint::fill(Color::BLUE));
+    canvas.draw_rect(compose::ui::Rect::new(2.0, 2.0, 3.0, 3.0), Paint::fill(Color::GREEN));
+    sample
+}
+
+// Compose: compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/painter/BitmapPainterTest.kt, testFilterQualityNone
+#[test]
+fn bitmap_painter_filter_quality_none_samples_nearest() {
+    use compose::ui::canvas::{Canvas, CanvasDrawScope};
+    use compose::ui::{Density, FilterQuality, LayoutDirection, Rect};
+
+    let sample = diagonal_sample_bitmap();
+    let dst = ImageBitmap::new(90, 90);
+    let mut canvas = Canvas::new(&dst);
+    let painter = Painter::new(BitmapPainter::with_filter_quality(
+        sample,
+        compose::ui::IntOffset::ZERO,
+        IntSize::new(3, 3),
+        FilterQuality::None,
+    ));
+    CanvasDrawScope::draw(
+        &mut canvas,
+        Density::new(1.0),
+        LayoutDirection::Ltr,
+        Size::new(90.0, 90.0),
+        |scope| {
+            scope.draw_rect(Rect::new(0.0, 0.0, 90.0, 90.0), Paint::fill(Color::WHITE));
+            painter.draw(scope, Size::new(90.0, 90.0), 1.0, None);
+        },
+    );
+    let map = dst.to_pixel_map();
+    for i in 0..30 {
+        for j in 0..30 {
+            assert_eq!(map.get(i, j), Color::RED, "at {i}, {j}");
+        }
+    }
+    for i in 30..60 {
+        for j in 30..60 {
+            assert_eq!(map.get(i, j), Color::BLUE, "at {i}, {j}");
+        }
+    }
+    for i in 60..90 {
+        for j in 60..90 {
+            assert_eq!(map.get(i, j), Color::GREEN, "at {i}, {j}");
+        }
+    }
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ImageTest.kt, testImageFilterQualityNone
+#[test]
+fn image_composable_filter_quality_none_and_color_filter() {
+    use compose::foundation::Image;
+    use compose::ui::FilterQuality;
+
+    compose::ui::platform::set_bitmap_rasterizer(std::sync::Arc::new(
+        compose_skia::SkiaBitmapRasterizer,
+    ));
+    let sample = ImageBitmap::new(2, 2);
+    {
+        let mut canvas = compose::ui::canvas::Canvas::new(&sample);
+        canvas.draw_rect(compose::ui::Rect::new(0.0, 0.0, 2.0, 2.0), Paint::fill(Color::WHITE));
+        canvas.draw_rect(compose::ui::Rect::new(0.0, 0.0, 1.0, 1.0), Paint::fill(Color::RED));
+        canvas.draw_rect(compose::ui::Rect::new(1.0, 1.0, 2.0, 2.0), Paint::fill(Color::BLUE));
+    }
+    set_capture_renderer(compose_skia::raster_colors);
+    let sample_for_none = sample.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(20, 20), move || {
+        Image!(
+            sample_for_none.clone(),
+            Some("FilterQuality None"),
+            modifier = Modifier.size(20.dp()).test_tag(TAG),
+            filter_quality = FilterQuality::None,
+        );
+    });
+    let captured = ui.on_node_with_tag(TAG).capture_to_image();
+    for i in 0..10 {
+        for j in 0..10 {
+            assert_eq!(captured.pixel(i, j), Color::RED, "at {i}, {j}");
+        }
+    }
+    for i in 11..20 {
+        for j in 11..20 {
+            assert_eq!(captured.pixel(i, j), Color::BLUE, "at {i}, {j}");
+        }
+    }
+
+    // ColorFilter parameter on Image bitmap composable.
+    let mut tinted_ui = ComposeTestRule::sized(IntSize::new(10, 10), move || {
+        Image!(
+            sample.clone(),
+            None,
+            modifier = Modifier.size(10.dp()).test_tag(TAG),
+            color_filter = Some(ColorFilter::tint(Color::GREEN)),
+        );
+    });
+    tinted_ui.on_node_with_tag(TAG).capture_to_image().assert_pixel_color(Color::GREEN, 2, 2);
+}
+
+// Compose: compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/drawscope/DrawScopeTest.kt, testDrawImageWithFilterQualityNone
+#[test]
+fn draw_image_with_filter_quality_modes() {
+    use compose::ui::canvas::{Canvas, CanvasDrawScope};
+    use compose::ui::{Density, FilterQuality, LayoutDirection, Rect};
+
+    let sample = diagonal_sample_bitmap();
+    let render_with = |quality: FilterQuality| {
+        let dst = ImageBitmap::new(90, 90);
+        let mut canvas = Canvas::new(&dst);
+        CanvasDrawScope::draw(
+            &mut canvas,
+            Density::new(1.0),
+            LayoutDirection::Ltr,
+            Size::new(90.0, 90.0),
+            |scope| {
+                scope.draw_rect(Rect::new(0.0, 0.0, 90.0, 90.0), Paint::fill(Color::WHITE));
+                scope.draw_image_with(
+                    &sample,
+                    Rect::new(0.0, 0.0, 3.0, 3.0),
+                    Rect::new(0.0, 0.0, 90.0, 90.0),
+                    1.0,
+                    None,
+                    quality,
+                );
+            },
+        );
+        dst.to_pixel_map()
+    };
+    let nearest = render_with(FilterQuality::None);
+    assert_eq!(nearest.get(29, 29), Color::RED);
+    assert_eq!(nearest.get(30, 30), Color::BLUE);
+    for quality in [FilterQuality::Low, FilterQuality::Medium, FilterQuality::High] {
+        // Interpolated boundary pixel between Red (0,0) and White (1,0) isn't pure Red.
+        let filtered = render_with(quality);
+        assert_ne!(filtered.get(29, 10), Color::RED, "quality {quality:?} should interpolate");
+    }
+}

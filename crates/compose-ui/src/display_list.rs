@@ -58,13 +58,15 @@ pub enum DrawOp {
         translation: Offset,
     },
     /// The part `src` of a bitmap (in its pixels) drawn into `dst`, at `alpha`, through
-    /// `color_filter` (of the list's `color_filters`) if any, as `drawImage(…, colorFilter)`.
+    /// `color_filter` (of the list's `color_filters`) if any, sampled as `filter_quality` says,
+    /// as `drawImage(…, colorFilter, filterQuality)`.
     DrawImage {
         image: crate::image::ImageBitmap,
         src: Rect,
         dst: Rect,
         alpha: f32,
         color_filter: Option<ColorFilterIndex>,
+        filter_quality: crate::image::FilterQuality,
     },
     /// The shadows of `outline` raised by `elevation` pixels, lit from `light` (x, y, z in the
     /// window's pixels, not moved by transforms) of `light_radius`: an ambient shadow in
@@ -287,9 +289,23 @@ impl Same for DrawOp {
                 D::Transform { pivot: pb, scale: sb, rotation: rb, translation: tb },
             ) => pa.same(pb) && sa.same(sb) && ra.same(rb) && ta.same(tb),
             (
-                D::DrawImage { image: ia, src: sa, dst: da, alpha: aa, color_filter: fa },
-                D::DrawImage { image: ib, src: sb, dst: db, alpha: ab, color_filter: fb },
-            ) => ia == ib && sa.same(sb) && da.same(db) && aa.same(ab) && fa == fb,
+                D::DrawImage {
+                    image: ia,
+                    src: sa,
+                    dst: da,
+                    alpha: aa,
+                    color_filter: fa,
+                    filter_quality: qa,
+                },
+                D::DrawImage {
+                    image: ib,
+                    src: sb,
+                    dst: db,
+                    alpha: ab,
+                    color_filter: fb,
+                    filter_quality: qb,
+                },
+            ) => ia == ib && sa.same(sb) && da.same(db) && aa.same(ab) && fa == fb && qa == qb,
             (
                 D::DrawShadow {
                     outline: oa,
@@ -387,7 +403,7 @@ pub struct DisplayList {
     pub ops: Vec<DrawOp>,
     /// The shaders its paints refer to (`Paint::shader`), by index: each recording's own, so a
     /// group's content is drawn with its content's shaders.
-    pub shaders: Vec<crate::brush::Shader>,
+    pub shaders: Vec<crate::brush::PaintShader>,
     /// The color filters its paints, images and layers refer to (`Paint::color_filter`), by
     /// index, as `shaders`.
     pub color_filters: Vec<ColorFilter>,
@@ -460,7 +476,7 @@ pub struct FlatDisplayList {
     pub groups: Vec<FlatGroup>,
     /// The shaders the paints refer to, by index: every recording's, their paints' indices
     /// shifted to them.
-    pub shaders: Vec<crate::brush::Shader>,
+    pub shaders: Vec<crate::brush::PaintShader>,
     /// The color filters they refer to, by index, as `shaders`.
     pub color_filters: Vec<ColorFilter>,
 }
@@ -500,7 +516,7 @@ impl DisplayList {
     }
 
     /// Keeps `shader` for this list's paints, returning the index they refer to it by.
-    pub fn push_shader(&mut self, shader: crate::brush::Shader) -> crate::brush::ShaderIndex {
+    pub fn push_shader(&mut self, shader: crate::brush::PaintShader) -> crate::brush::ShaderIndex {
         self.shaders.push(shader);
         crate::brush::ShaderIndex::new(self.shaders.len() as u32 - 1)
     }
@@ -616,15 +632,22 @@ impl FlatDisplayList {
                     filter_text(color_filter),
                     blend_text(*blend_mode)
                 ),
-                DrawOp::DrawImage { image, src, dst, alpha, color_filter } => writeln!(
-                    out,
-                    "image {}x{} {} into {} alpha {alpha}{}",
-                    image.width(),
-                    image.height(),
-                    rect_text(src),
-                    rect_text(dst),
-                    filter_text(color_filter),
-                ),
+                DrawOp::DrawImage { image, src, dst, alpha, color_filter, filter_quality } => {
+                    writeln!(
+                        out,
+                        "image {}x{} {} into {} alpha {alpha}{}{}",
+                        image.width(),
+                        image.height(),
+                        rect_text(src),
+                        rect_text(dst),
+                        filter_text(color_filter),
+                        if *filter_quality == crate::image::FilterQuality::Low {
+                            String::new()
+                        } else {
+                            format!(" quality {filter_quality:?}")
+                        },
+                    )
+                }
                 DrawOp::DrawPath { path, offset, scale, paint } => writeln!(
                     out,
                     "path of {} commands at {},{} scale {}x{} {}",
@@ -939,7 +962,11 @@ fn rect_text(rect: &Rect) -> String {
     format!("{},{} {}x{}", rect.left, rect.top, rect.width(), rect.height())
 }
 
-fn paint_text(paint: &Paint, shaders: &[crate::brush::Shader], filters: &[ColorFilter]) -> String {
+fn paint_text(
+    paint: &Paint,
+    shaders: &[crate::brush::PaintShader],
+    filters: &[ColorFilter],
+) -> String {
     let color = match paint.shader.and_then(|index| shaders.get(index.index())) {
         Some(shader) => shader_text(shader),
         None => format!("{:?}", paint.color),
@@ -975,13 +1002,19 @@ fn blend_text(blend_mode: BlendMode) -> String {
     if blend_mode == BlendMode::SrcOver { String::new() } else { format!(" blend {blend_mode:?}") }
 }
 
-fn shader_text(shader: &crate::brush::Shader) -> String {
+fn shader_text(shader: &crate::brush::PaintShader) -> String {
+    let alpha = if shader.alpha < 1.0 { format!(" alpha {}", shader.alpha) } else { String::new() };
+    let transform = shader
+        .transform
+        .as_ref()
+        .map_or(String::new(), |matrix| format!(" transform {:?}", matrix.values));
+    format!("{}{transform}{alpha}", plain_shader_text(&shader.shader))
+}
+
+/// A shader in a dump: a gradient's geometry, colors, stops and tile mode; a bitmap's size and
+/// tile modes; a composite's blend mode and shaders.
+fn plain_shader_text(shader: &crate::brush::Shader) -> String {
     use crate::brush::Shader;
-    let gradient = shader.gradient();
-    let colors: Vec<String> = gradient.colors.iter().map(|color| format!("{color:?}")).collect();
-    let stops = gradient.stops.as_ref().map_or(String::new(), |stops| format!(" at {stops:?}"));
-    let alpha =
-        if shader.alpha() < 1.0 { format!(" alpha {}", shader.alpha()) } else { String::new() };
     let geometry = match shader {
         Shader::LinearGradient { from, to, .. } => {
             format!("linear {},{} to {},{}", from.x, from.y, to.x, to.y)
@@ -990,6 +1023,24 @@ fn shader_text(shader: &crate::brush::Shader) -> String {
             format!("radial at {},{} radius {radius}", center.x, center.y)
         }
         Shader::SweepGradient { center, .. } => format!("sweep at {},{}", center.x, center.y),
+        Shader::Image { image, tile_mode_x, tile_mode_y } => {
+            return format!(
+                "image {}x{} {tile_mode_x:?} {tile_mode_y:?}",
+                image.width(),
+                image.height()
+            );
+        }
+        Shader::Composite(composite) => {
+            return format!(
+                "composite {:?} ({}) ({})",
+                composite.blend_mode,
+                plain_shader_text(&composite.dst),
+                plain_shader_text(&composite.src)
+            );
+        }
     };
-    format!("{geometry} [{}]{stops} {:?}{alpha}", colors.join(", "), gradient.tile_mode)
+    let gradient = shader.gradient().expect("a gradient");
+    let colors: Vec<String> = gradient.colors.iter().map(|color| format!("{color:?}")).collect();
+    let stops = gradient.stops.as_ref().map_or(String::new(), |stops| format!(" at {stops:?}"));
+    format!("{geometry} [{}]{stops} {:?}", colors.join(", "), gradient.tile_mode)
 }

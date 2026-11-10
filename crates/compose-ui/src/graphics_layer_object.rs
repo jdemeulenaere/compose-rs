@@ -889,6 +889,9 @@ impl DrawScope<'_> {
         let start = list.ops.len();
         crate::display_list::extend_shifted(&mut list.ops, &recording.ops, bases);
         if let Some(alpha) = modulated {
+            for shader in &mut list.shaders[bases.0 as usize..] {
+                shader.scale_alpha(alpha);
+            }
             for op in &mut list.ops[start..] {
                 match op {
                     DrawOp::DrawImage { alpha: image, .. } => *image *= alpha,

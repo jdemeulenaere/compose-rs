@@ -1,12 +1,14 @@
 package rs.compose.android
 
 import android.graphics.Bitmap
+import android.graphics.BitmapShader
 import android.graphics.BlendMode
 import android.graphics.BlendModeColorFilter
 import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.ColorFilter
 import android.graphics.ColorMatrixColorFilter
+import android.graphics.ComposeShader
 import android.graphics.LightingColorFilter
 import android.graphics.LinearGradient
 import android.graphics.Matrix
@@ -112,6 +114,7 @@ internal class Replayer(
     private var shaderCount = 0
     private var shaderNext = 0
     private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private var bitmapPaintFiltered = true
     /** The paint a `SAVE_LAYER` composites its layer with. */
     private val layerPaint = Paint()
     /**
@@ -208,11 +211,14 @@ internal class Replayer(
         val stroke = flags and PAINT_STROKE != 0
         val width = float()
         val cap = get().toInt()
-        val kind = get().toInt()
+        val kind = get().toInt() and 0xff
         val shader = if (kind == SHADER_NONE) null else readShader(kind, x, y, scaleX, scaleY)
-        if (shader != null) {
-            // The shader paints; the paint's alpha is the gradient's, as compose-skia's.
-            color = (float().coerceIn(0f, 1f) * 255f + 0.5f).toInt() shl 24
+        if (kind != SHADER_NONE) {
+            // The shader paints; the paint's alpha is the shader's, as compose-skia's.
+            val shaderAlpha = float()
+            if (shader != null) {
+                color = (shaderAlpha.coerceIn(0f, 1f) * 255f + 0.5f).toInt() shl 24
+            }
         }
         val blendMode = if (flags and PAINT_BLEND_MODE != 0) get().toInt() else BLEND_SRC_OVER
         val filter = if (flags and PAINT_COLOR_FILTER != 0) readColorFilter() else null
@@ -562,7 +568,7 @@ internal class Replayer(
             // Where the frame's records and operations start: after its resource changes and its
             // `LAYERS` section.
             if (!layersRetired && hardware && !recordingAhead && recordingGroup == null &&
-                tag != LAYERS && (tag < DEFINE_PATH || tag > DROP_IMAGE)
+                tag != LAYERS && tag != DEFINE_IMAGE_WITH && (tag < DEFINE_PATH || tag > DROP_IMAGE)
             ) {
                 retireLayers(buffer, buffer.position() - 1)
             }
@@ -685,6 +691,11 @@ internal class Replayer(
                     val src = buffer.readRect(RectF())
                     buffer.readRect(rect)
                     bitmapPaint.alpha = (buffer.float().coerceIn(0f, 1f) * 255f + 0.5f).toInt()
+                    val filtered = buffer.get().toInt() != 0
+                    if (filtered != bitmapPaintFiltered) {
+                        bitmapPaintFiltered = filtered
+                        bitmapPaint.isFilterBitmap = filtered
+                    }
                     val filter = buffer.readColorFilter()
                     if (filter !== bitmapPaint.colorFilter) bitmapPaint.colorFilter = filter
                     if (image != null) {
@@ -738,6 +749,7 @@ internal class Replayer(
                 DEFINE_PATH -> definePath(buffer)
                 DROP_PATH -> dropPath(buffer.getInt())
                 DEFINE_IMAGE -> defineImage(buffer)
+                DEFINE_IMAGE_WITH -> defineImageWith(buffer)
                 DROP_IMAGE -> {
                     val id = buffer.getInt()
                     images.get(id)?.recycle()
@@ -980,6 +992,7 @@ internal class Replayer(
                     DEFINE_PATH -> definePath(buffer)
                     DROP_PATH -> dropPath(buffer.getInt())
                     DEFINE_IMAGE -> defineImage(buffer)
+                    DEFINE_IMAGE_WITH -> defineImageWith(buffer)
                     DROP_IMAGE -> {
                         val id = buffer.getInt()
                         images.get(id)?.recycle()
@@ -1416,24 +1429,13 @@ internal class Replayer(
      */
     private fun ByteBuffer.readShader(kind: Int, x: Float, y: Float, scaleX: Float, scaleY: Float): Shader? {
         val start = position() - 1
-        val geometry = when (kind) {
-            SHADER_LINEAR -> 16
-            SHADER_RADIAL -> 12
-            SHADER_SWEEP -> 8
-            else -> {
-                unreadable = true
-                return null
-            }
+        val hasMatrix = kind and SHADER_LOCAL_MATRIX != 0
+        if (!skipPlainShader(kind and SHADER_LOCAL_MATRIX.inv())) {
+            unreadable = true
+            return null
         }
-        val colorsAt = start + 2 + geometry
-        val colorCount = getInt(colorsAt)
-        val stopsAt = colorsAt + 4 + 4 * colorCount
-        val stopCount = getInt(stopsAt)
-        val tileByte = get(start + 1).toInt() and 0xff
-        val longsAt = stopsAt + 4 + 4 * stopCount
-        val wide = tileByte and WIDE_GRADIENT != 0
-        val end = longsAt + if (wide) 8 * colorCount else 0
-        position(end)
+        if (hasMatrix) position(position() + 9 * 4)
+        val end = position()
         // A NaN transform matches no key (NaN isn't equal to itself): built, never kept.
         val cacheable = !x.isNaN() && !y.isNaN() && !scaleX.isNaN() && !scaleY.isNaN()
         if (cacheable) {
@@ -1441,52 +1443,30 @@ internal class Replayer(
                 if (shaderMatches(index, this, start, end, x, y, scaleX, scaleY)) return shaders[index]
             }
         }
-        val colors = IntArray(colorCount) { getInt(colorsAt + 4 + it * 4) }
-        val stops = if (stopCount == 0) null else FloatArray(stopCount) { floatAt(stopsAt + 4 + it * 4) }
-        // Android's color longs, of one space, as Compose's gradients take (API 29); BT.2020 HLG
-        // and PQ (Android's 16 and 17) only from API 34, else the ARGB colors.
-        val longs = if (!wide) null else LongArray(colorCount) { getLong(longsAt + it * 8) }
-            .takeIf { Build.VERSION.SDK_INT >= 34 || (it[0] and 0x3fL).toInt() !in 16..17 }
-        val tileMode = when (tileByte and WIDE_GRADIENT.inv()) {
-            1 -> Shader.TileMode.REPEAT
-            2 -> Shader.TileMode.MIRROR
-            // Transparent past the ends: API 31+, clamped below.
-            3 -> if (Build.VERSION.SDK_INT >= 31) Shader.TileMode.DECAL else Shader.TileMode.CLAMP
-            else -> Shader.TileMode.CLAMP
+        position(start + 1)
+        val shader = buildPlainShader(kind and SHADER_LOCAL_MATRIX.inv())
+        if (shader == null) {
+            position(end)
+            return null
         }
-        val shader = if (longs != null) when (kind) {
-            SHADER_LINEAR -> LinearGradient(
-                floatAt(start + 2),
-                floatAt(start + 6),
-                floatAt(start + 10),
-                floatAt(start + 14),
-                longs,
-                stops,
-                tileMode,
-            )
-            SHADER_RADIAL ->
-                RadialGradient(floatAt(start + 2), floatAt(start + 6), floatAt(start + 10), longs, stops, tileMode)
-            else -> SweepGradient(floatAt(start + 2), floatAt(start + 6), longs, stops)
-        } else when (kind) {
-            SHADER_LINEAR -> LinearGradient(
-                floatAt(start + 2),
-                floatAt(start + 6),
-                floatAt(start + 10),
-                floatAt(start + 14),
-                colors,
-                stops,
-                tileMode,
-            )
-            SHADER_RADIAL ->
-                RadialGradient(floatAt(start + 2), floatAt(start + 6), floatAt(start + 10), colors, stops, tileMode)
-            else -> SweepGradient(floatAt(start + 2), floatAt(start + 6), colors, stops)
-        }
+        var local: Matrix? = null
         if ((x != 0f || y != 0f || scaleX != 1f || scaleY != 1f) && scaleX != 0f && scaleY != 0f) {
-            val local = Matrix()
-            local.setScale(1f / scaleX, 1f / scaleY)
-            local.preTranslate(-x, -y)
-            shader.setLocalMatrix(local)
+            local = Matrix().apply {
+                setScale(1f / scaleX, 1f / scaleY)
+                preTranslate(-x, -y)
+            }
         }
+        if (hasMatrix) {
+            for (index in 0 until 9) matrixValues[index] = float()
+            concatMatrix.setValues(matrixValues)
+            if (local == null) {
+                local = Matrix(concatMatrix)
+            } else {
+                local.preConcat(concatMatrix)
+            }
+        }
+        if (local != null) shader.setLocalMatrix(local)
+        position(end)
         if (!cacheable) return shader
         val at = if (shaderCount < SHADER_CACHE_CAPACITY) shaderCount++ else shaderNext.also {
             shaderNext = (shaderNext + 1) % SHADER_CACHE_CAPACITY
@@ -1498,6 +1478,85 @@ internal class Replayer(
         shaderLocals[at * 4 + 3] = scaleY
         shaders[at] = shader
         return shader
+    }
+
+    private fun ByteBuffer.skipPlainShader(kind: Int): Boolean {
+        when (kind) {
+            SHADER_LINEAR, SHADER_RADIAL, SHADER_SWEEP -> {
+                val start = position() - 1
+                val geometry = when (kind) {
+                    SHADER_LINEAR -> 16
+                    SHADER_RADIAL -> 12
+                    else -> 8
+                }
+                val colorsAt = start + 2 + geometry
+                val colorCount = getInt(colorsAt)
+                val stopsAt = colorsAt + 4 + 4 * colorCount
+                val stopCount = getInt(stopsAt)
+                val wide = get(start + 1).toInt() and WIDE_GRADIENT != 0
+                position(stopsAt + 4 + 4 * stopCount + if (wide) 8 * colorCount else 0)
+            }
+            SHADER_IMAGE -> position(position() + 6)
+            SHADER_COMPOSITE -> {
+                get()
+                val dstKind = get().toInt() and 0xff
+                if (!skipPlainShader(dstKind)) return false
+                val srcKind = get().toInt() and 0xff
+                if (!skipPlainShader(srcKind)) return false
+            }
+            else -> return false
+        }
+        return true
+    }
+
+    private fun ByteBuffer.buildPlainShader(kind: Int): Shader? = when (kind) {
+        SHADER_IMAGE -> {
+            val tileX = tileModeOf(get().toInt() and 0xff)
+            val tileY = tileModeOf(get().toInt() and 0xff)
+            val bitmap = images.get(getInt()) ?: return null
+            BitmapShader(bitmap, tileX, tileY)
+        }
+        SHADER_COMPOSITE -> {
+            val blendMode = blendModeOf(get().toInt() and 0xff)
+            val dst = buildPlainShader(get().toInt() and 0xff) ?: return null
+            val src = buildPlainShader(get().toInt() and 0xff) ?: return null
+            ComposeShader(dst, src, blendMode)
+        }
+        SHADER_LINEAR, SHADER_RADIAL, SHADER_SWEEP -> {
+            val tileByte = get().toInt() and 0xff
+            val fromX = float()
+            val fromY = float()
+            val p2 = if (kind != SHADER_SWEEP) float() else 0f
+            val p3 = if (kind == SHADER_LINEAR) float() else 0f
+            val colorCount = getInt()
+            val colors = IntArray(colorCount) { getInt() }
+            val stopCount = getInt()
+            val stops = if (stopCount == 0) null else FloatArray(stopCount) { float() }
+            val wide = tileByte and WIDE_GRADIENT != 0
+            // Android's color longs, of one space, as Compose's gradients take (API 29); BT.2020 HLG
+            // and PQ (Android's 16 and 17) only from API 34, else the ARGB colors.
+            val longs = if (!wide) null else LongArray(colorCount) { getLong() }
+                .takeIf { Build.VERSION.SDK_INT >= 34 || (it[0] and 0x3fL).toInt() !in 16..17 }
+            val tileMode = tileModeOf(tileByte and WIDE_GRADIENT.inv())
+            if (longs != null) when (kind) {
+                SHADER_LINEAR -> LinearGradient(fromX, fromY, p2, p3, longs, stops, tileMode)
+                SHADER_RADIAL -> RadialGradient(fromX, fromY, p2, longs, stops, tileMode)
+                else -> SweepGradient(fromX, fromY, longs, stops)
+            } else when (kind) {
+                SHADER_LINEAR -> LinearGradient(fromX, fromY, p2, p3, colors, stops, tileMode)
+                SHADER_RADIAL -> RadialGradient(fromX, fromY, p2, colors, stops, tileMode)
+                else -> SweepGradient(fromX, fromY, colors, stops)
+            }
+        }
+        else -> null
+    }
+
+    private fun tileModeOf(mode: Int): Shader.TileMode = when (mode) {
+        1 -> Shader.TileMode.REPEAT
+        2 -> Shader.TileMode.MIRROR
+        // Transparent past the ends: API 31+, clamped below.
+        3 -> if (Build.VERSION.SDK_INT >= 31) Shader.TileMode.DECAL else Shader.TileMode.CLAMP
+        else -> Shader.TileMode.CLAMP
     }
 
     /** Whether kept shader [index] is the definition from [start] to [end] with that transform. */
@@ -1773,6 +1832,23 @@ internal class Replayer(
         images.put(id, bitmap)
     }
 
+    private fun defineImageWith(buffer: ByteBuffer) {
+        val id = buffer.getInt()
+        val width = buffer.getInt()
+        val height = buffer.getInt()
+        val config = buffer.get().toInt() and 0xff
+        val hasAlpha = buffer.get().toInt() != 0
+        val colorSpaceId = buffer.get().toInt() and 0xff
+        val length = buffer.getInt()
+        val pixels = buffer.slice()
+        pixels.limit(length)
+        buffer.position(buffer.position() + length)
+        val bitmap = ComposeRsImages.createPlatformBitmap(width, height, config, hasAlpha, colorSpaceId)
+        if (length > 0) bitmap.copyPixelsFromBuffer(pixels)
+        images.get(id)?.recycle()
+        images.put(id, bitmap)
+    }
+
     fun clear() {
         effects?.discardNodes()
         keptNode.discardDisplayList()
@@ -1859,6 +1935,7 @@ internal class Replayer(
         const val CONCAT = 26
         const val CLIP_OUT_PATH = 27
         const val DRAW_VERTICES = 28
+        const val DEFINE_IMAGE_WITH = 29
 
         // A paint's style flags: what follows its color and stroke width.
         const val PAINT_STROKE = 1
@@ -1897,6 +1974,10 @@ internal class Replayer(
         const val SHADER_LINEAR = 1
         const val SHADER_RADIAL = 2
         const val SHADER_SWEEP = 3
+        const val SHADER_IMAGE = 4
+        const val SHADER_COMPOSITE = 5
+        /** In a paint's shader kind byte: 9 local-matrix floats follow its definition (D2405). */
+        const val SHADER_LOCAL_MATRIX = 128
         /** In a gradient's tile mode byte: its colors' color longs follow its stops. */
         const val WIDE_GRADIENT = 128
 

@@ -4,6 +4,7 @@
 //! [`VectorPainter`] drawing one.
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::alignment::LayoutDirection;
@@ -810,7 +811,7 @@ struct ImageVectorData {
 /// right to left if `auto_mirror`. Built with [`ImageVector::builder`]; immutable and shared (a
 /// clone copies nothing), its paths made once for every painter drawing it.
 #[derive(Clone)]
-pub struct ImageVector(Arc<ImageVectorData>);
+pub struct ImageVector(Rc<ImageVectorData>);
 
 impl ImageVector {
     /// A builder of a vector of a default size and viewport, as `ImageVector.Builder`.
@@ -885,7 +886,7 @@ impl ImageVector {
 
     /// Whether `other` is this vector, not only an equal one.
     pub fn ptr_eq(&self, other: &ImageVector) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
+        Rc::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -1008,7 +1009,7 @@ impl ImageVectorBuilder {
         let render = RenderGroup::of(&root);
         let mut fills = Vec::new();
         let solid_fills = render.solid_fills(&mut fills).then_some(fills);
-        ImageVector(Arc::new(ImageVectorData {
+        ImageVector(Rc::new(ImageVectorData {
             name: std::mem::take(&mut self.name),
             default_width: self.default_width,
             default_height: self.default_height,

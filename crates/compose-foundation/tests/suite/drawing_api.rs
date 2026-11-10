@@ -204,7 +204,7 @@ fn gradients_in_repaint_boundaries_keep_their_shaders_when_spliced() {
                 compose_ui::platform::DrawOp::DrawRect(_, paint) => paint.shader(),
                 _ => None,
             })
-            .map(|index| list.shaders[index.index()].gradient().colors[0])
+            .map(|index| list.shaders[index.index()].gradient().unwrap().colors[0])
             .collect();
         assert_eq!(colors, vec![Color::RED, Color::BLUE]);
     };
