@@ -3567,9 +3567,6 @@ fn a_static_local_and_a_dynamic_one_from_it_both_reach_a_slot() {
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/SubcomposeLayoutTest.kt, derivedStateChangeInMainCompositionRecomposesSubcomposition
 #[test]
-#[ignore = "a slot's content runs again at a forced recomposition (the layout's body ran) after \
-            the recomposer already ran it for the derived state: Compose's slot content is a \
-            skippable call (`ReusableContentHost`), skipped when nothing it reads changed"]
 fn a_derived_state_of_the_composition_above_reaches_a_slot() {
     let flag = mutable_state_of(true);
     let (seen, inconsistent) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(false)));
@@ -4007,10 +4004,6 @@ fn precompose_over_what_was_kept_with_a_new_element(auto: bool) {
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/SubcomposeLayoutTest.kt, precomposeOverReusedNodeWithUpdatedModifierIsNotCausingEarlyRemeasureForIt2
 #[test]
-#[ignore = "review: a kept slot reused by a precomposition has its modifier updated while its nodes \
-            are still detached, so a node's own `invalidate_measurement` from its update (not \
-            auto-invalidated) is dropped and the premeasure measures nothing; Compose's `onReuse` \
-            attaches the nodes before the update"]
 fn precomposing_over_what_was_kept_with_a_new_element_measures_and_places_it_once() {
     precompose_over_what_was_kept_with_a_new_element(false);
 }
@@ -4100,9 +4093,6 @@ fn a_height_too_large_panics() {
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/SubcomposeLayoutTest.kt, nestedDisposeIsCalledInOrder
 #[test]
-#[ignore = "nested subcompositions are disposed after the effects of the slot holding them: \
-            [outer, inner 1, inner 2], where Compose forgets in the reverse order of remembering, \
-            a nested layout's slots as it's forgotten: [inner 2, outer, inner 1]"]
 fn nested_box_with_constraints_are_disposed_last_first() {
     let (order, active): (Rc<RefCell<Vec<&str>>>, _) = (Rc::default(), mutable_state_of(true));
     let (o, a) = (order.clone(), active.handle());

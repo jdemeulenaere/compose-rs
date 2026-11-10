@@ -344,6 +344,17 @@ impl UiTree {
         }
     }
 
+    /// Marks the entries of `node`, reused from the kept pool (detached at its deactivation),
+    /// attached at its reuse, before the new content's elements update it, as Compose's `onReuse`
+    /// (`markAsAttached`, ahead of the update): what an update asks through its handle
+    /// (`invalidate_measurement`) counts, and `is_attached` says so. Their `on_attach` waits for the
+    /// pass's end (`Lifecycle::AttachEntries`), where compose-rs runs application callbacks (D1153,
+    /// D2392).
+    pub(crate) fn attach_reused(&mut self, node: NodeId) {
+        self.mark_attached(node);
+        self.queue_lifecycle(Lifecycle::AttachEntries(node));
+    }
+
     /// Detaches `entry` (its `on_detach` ran or wasn't due): not attached, its scope cancelled,
     /// its handles told.
     pub(crate) fn mark_entry_detached(&mut self, entry: EntryId, state: &mut u8) {
@@ -688,6 +699,10 @@ impl UiTree {
         pass.0.run_modifier_local_changes();
         pass.0.run_lifecycle_steps();
         pass.0.flush_focus_invalidations();
+        // Requests `Element::update` or lifecycle callbacks queued through handles in this pass
+        // apply before the pass's `ignoring_remeasure` guard lifts, as Compose's run in the pass
+        // (`SubcomposeLayout`'s `precompose` ignores what an update invalidates, D2392).
+        pass.0.drain_node_requests();
     }
 
     fn run_lifecycle_steps(&mut self) {
@@ -826,9 +841,20 @@ impl UiTree {
         }));
         self.remeasure_allowed = allowed;
         result.unwrap_or_else(|panic| panic::resume_unwind(panic));
+        self.drain_node_requests();
+    }
+
+    fn drain_node_requests(&mut self) {
+        if self.focus_requests.measure_requests.borrow().is_empty()
+            && self.focus_requests.node_invalidations.borrow().is_empty()
+        {
+            return;
+        }
         let requests = self.focus_requests.clone();
-        for node in mem::take(&mut *requests.measure_requests.borrow_mut()) {
-            self.invalidate_layout_of(node);
+        if !requests.measure_requests.borrow().is_empty() {
+            for node in mem::take(&mut *requests.measure_requests.borrow_mut()) {
+                self.invalidate_layout_of(node);
+            }
         }
         // Nothing taken when nothing's asked: what's taken with no request would lose its capacity.
         while !requests.node_invalidations.borrow().is_empty() {

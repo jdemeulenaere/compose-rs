@@ -55,8 +55,8 @@ use std::hash::Hash;
 use std::rc::{Rc, Weak};
 
 use compose_runtime::{
-    ComposeArg, CoroutineScope, ImmutableList, ObjectHandle, Owned, OwnedState,
-    SaveableStateHolder, composable, hash_key, mutable_state_of,
+    ComposeArg, CoroutineScope, ImmutableList, ObjectHandle, Owned, OwnedState, composable,
+    hash_key, mutable_state_of,
 };
 use compose_ui::{
     Alignment, Constraints, Dp, EventContext, HorizontalAlignment, IntOffset, IntSize, Layout,
@@ -1997,17 +1997,17 @@ fn LazyList(
 /// doesn't run the provider again).
 #[composable]
 #[allow(non_snake_case)]
-pub(super) fn LazyItem(
-    index: usize,
-    state: LazyListState,
-    holder: SaveableStateHolder,
-    stacking: ItemStacking,
-) {
+pub(super) fn LazyItem(index: usize, item_key: u64, state: LazyListState) {
     let inner = state.inner_or_detached();
-    // The items as they are now, as Compose's item reads `itemProvider()`.
-    let Some(items) = inner.factory.borrow().as_ref().map(|factory| factory.items.clone()) else {
+    // Run again when the list's factory changes (`LazyItemsLayout`), so `LazyItem` gets the new
+    // `items`, `holder` and `stacking` even when the slot's `SlotContent` skips its cached
+    // `Callback` (D2393), while keeping this item's `Layout` node for reuse if its key went.
+    inner.contents.scopes.borrow_mut().insert(item_key, compose_runtime::current_recompose_scope());
+    // The factory as it is now, as Compose's item reads `itemProvider()`.
+    let Some(factory) = inner.factory.borrow().clone() else {
         return;
     };
+    let (items, holder, stacking) = (factory.items.clone(), factory.holder, factory.stacking);
     let policy = compose_runtime::remember_keyed(stacking, || {
         Rc::new_cyclic(|this| ItemLayout {
             this: this.clone(),
@@ -2017,7 +2017,11 @@ pub(super) fn LazyItem(
         })
     });
     policy.state.set(state);
-    let item_key = items.0.key(index);
+    let current_index = if index < items.0.count && items.0.key(index) == item_key {
+        Some(index)
+    } else {
+        items.0.index_of(item_key, index)
+    };
     inner.item_animator.item_composed(&policy, item_key);
     // The lazy lists composing in the item note themselves in this list under its key, whoever
     // composes it (a frame here, a request's resumes, a completion), as Compose's request finds
@@ -2037,7 +2041,9 @@ pub(super) fn LazyItem(
             count: Cell::new(0),
         })
     });
-    pin.near.set(index);
+    if let Some(found) = current_index {
+        pin.near.set(found);
+    }
     pin.set_parent(parent);
     let container: Rc<dyn compose_ui::PinnableContainer> = pin.clone();
     // An item is a repaint boundary: scrolled, or beside an animation, it's not recorded again.
@@ -2046,32 +2052,25 @@ pub(super) fn LazyItem(
         modifier,
         policy as Rc<dyn MeasurePolicy>,
         compose_runtime::callback(move || {
-            // Run again when the list's content changes (`LazyItemsLayout`), with the items as
-            // they are then, as Compose's item reads `itemProvider()`: restarting for a state of its
-            // own after the list's content changed, it runs the new content, once.
+            // If this inner scope restarts for a state of its own after the list's content
+            // changed, read the latest items too.
             let inner = state.inner_or_detached();
-            inner
-                .contents
-                .scopes
-                .borrow_mut()
-                .insert(item_key, compose_runtime::current_recompose_scope());
-            let current = inner.factory.borrow().as_ref().map(|it| it.items.clone());
+            let current = inner.factory.borrow().as_ref().map(|it| (it.items.clone(), it.holder));
             drop(inner);
-            let (items, index) = match current {
-                Some(now) if !Rc::ptr_eq(&now.0, &items.0) => {
-                    let found = if index < now.0.count && now.0.key(index) == item_key {
-                        Some(index)
+            let (items, holder, found) = match current {
+                Some((now, now_holder)) if !Rc::ptr_eq(&now.0, &items.0) => {
+                    let guess = current_index.unwrap_or(index);
+                    let found = if guess < now.0.count && now.0.key(guess) == item_key {
+                        Some(guess)
                     } else {
-                        now.0.index_of(item_key, index)
+                        now.0.index_of(item_key, guess)
                     };
-                    // Gone from the items: nothing, as Compose's `getIndex(key) == -1`.
-                    match found {
-                        Some(found) => (now, found),
-                        None => return,
-                    }
+                    (now, now_holder, found)
                 }
-                _ => (items.clone(), index),
+                _ => (items.clone(), holder, current_index),
             };
+            // Gone from the items: nothing, as Compose's `getIndex(key) == -1`.
+            let Some(index) = found else { return };
             if let Some((interval, local)) = items.0.find(index) {
                 compose_runtime::CompositionLocalProvider(
                     compose_ui::LOCAL_PINNABLE_CONTAINER.provides(Some(container.clone())),

@@ -191,8 +191,8 @@ pub(super) struct ItemFactory {
     /// The list's contents by key, `ItemContents`, held here not to look the list up per item.
     contents: Rc<ItemContents>,
     pub(super) items: ItemsRef,
-    holder: SaveableStateHolder,
-    stacking: ItemStacking,
+    pub(super) holder: SaveableStateHolder,
+    pub(super) stacking: ItemStacking,
 }
 
 /// The items' contents, by key, as Compose's `CachedItemContent`s: an item's content is the same
@@ -282,7 +282,7 @@ impl ItemFactory {
             };
             if let Some(found) = found {
                 at.set(found);
-                LazyItem(found, state, factory.holder, factory.stacking);
+                LazyItem(found, key, state);
             }
         });
         contents.insert(key, (near, content.clone()));

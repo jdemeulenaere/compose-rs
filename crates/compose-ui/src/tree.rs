@@ -2068,7 +2068,8 @@ impl UiTree {
         let value = self.node_mut(node);
         value.semantics_id = semantics_id;
         value.composite_key = compose_runtime::CompositeKeyToken::NONE;
-        if std::mem::take(&mut value.deactivated) {
+        let reactivated = std::mem::take(&mut value.deactivated);
+        if reactivated {
             // Its parent has a child to measure again (an ordinary layout's, or a list's): it
             // measures it again if it asked to while deactivated (`needs_measure` kept), as
             // Compose's `rescheduleRemeasureOrRelayout`; its ancestors, reused before it, are
@@ -2099,6 +2100,10 @@ impl UiTree {
             self.queue_lifecycle(crate::lifecycle::Lifecycle::Reset(node));
             self.paused_lifecycle.push(crate::lifecycle::Lifecycle::AttachEntries(node));
             self.node_mut(node).reattach_pending = true;
+        } else if reactivated {
+            // From the kept pool (reset and detached then): attached before the update, as
+            // Compose's `onReuse` (D2392).
+            self.attach_reused(node);
         } else {
             self.queue_lifecycle(crate::lifecycle::Lifecycle::Reuse(node));
         }
