@@ -724,6 +724,9 @@ impl UiTree {
                 self.map_to_root(node, layer, None, Offset::ZERO);
             }
         }
+        // A text selection's handles follow the layers above its container and the texts of its
+        // ends (`refresh_handles_if_moved`): those layers keep telling their moves (D2105).
+        self.note_selection_layers();
         self.note_rect_layers();
     }
 

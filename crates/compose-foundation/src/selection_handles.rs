@@ -305,6 +305,10 @@ pub(crate) trait HandleSource {
     fn tapped(&self, _handle: Handle) {}
     /// Its press was cancelled before the touch slop (no tap, no drag).
     fn press_cancelled(&self, _handle: Handle) {}
+    /// Its node left while pressed, before the touch slop: a field's press ends, as Compose's
+    /// press gesture's `invokeOnCompletion { clearHandleDragging() }`; a container's doesn't
+    /// (Compose's `detectPreDragGesturesWithObserver` calls no `onUp` when cancelled).
+    fn press_detached(&self, _handle: Handle) {}
     /// It was pressed.
     fn pressed(&self, _handle: Handle) {}
     /// A mouse's (or a touchpad's) event reached it.
@@ -358,6 +362,10 @@ impl HandleSource for TouchHandles {
             self.press_released.set(true);
             self.measure_field();
         }
+    }
+    /// The magnifier its press showed hides (D2106).
+    fn press_detached(&self, handle: Handle) {
+        self.press_cancelled(handle);
     }
     fn mouse_event(&self) {
         if !self.mouse.replace(true) {
@@ -742,6 +750,9 @@ impl ModifierNode for HandleNode {
         true
     }
     fn on_detach(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
+        if self.down.is_some() && self.origin.is_none() {
+            self.source.press_detached(self.handle);
+        }
         self.end_drag();
     }
 }

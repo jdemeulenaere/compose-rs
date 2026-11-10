@@ -154,6 +154,7 @@ mod review_layout_and_grid;
 mod review_lazy;
 mod review_lazy2;
 mod review_lazy_nested_scroll;
+mod review_magnifier;
 mod review_moved_node_attach;
 mod review_multi_paragraph;
 mod review_nested_scroll;
