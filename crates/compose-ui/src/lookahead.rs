@@ -342,10 +342,17 @@ impl UiTree {
     }
 
     /// Before `node`'s blocks: if it's a scope's outermost and its lookahead has blocks waiting,
-    /// they run, after what's around it, as Compose's root's placing them.
+    /// they run, after what's around it, as Compose's root's placing them. So do those of a node
+    /// the pass ahead didn't place (`place_ahead_now`).
     #[cold]
     pub(crate) fn lookahead_place_first(&mut self, node: NodeId) {
-        if self.in_lookahead || !self.is_outermost_lookahead_root(node) {
+        if self.in_lookahead {
+            return;
+        }
+        if !self.is_outermost_lookahead_root(node) {
+            if self.placed_ahead_by_none(node) {
+                self.place_ahead_now(node);
+            }
             return;
         }
         let state = self.node(node).lookahead.as_ref().expect("a root has it");
@@ -356,6 +363,40 @@ impl UiTree {
         if !state.needs_placement && !state.subtree_needs_placement {
             return;
         }
+        let pass = self.lookahead_pass(node);
+        pass.tree.place_pass(node);
+        drop(pass);
+        if !self.ahead_readers.is_empty() {
+            self.note_ahead_readers();
+        }
+    }
+
+    /// Whether `node`, being placed now under a scope's outermost, has blocks waiting ahead that
+    /// the pass ahead won't run: its parent didn't place it there, or isn't placed there itself (a
+    /// layout modifier of the parent's placing nothing ahead). Compose's `onApproachPlacement`
+    /// finds such a node not placed ahead and marks it `detachedFromParentLookaheadPlacement`
+    /// (D2450). A node not placed ahead by a layout modifier of its own isn't: what's inside it
+    /// is the one that is.
+    fn placed_ahead_by_none(&self, node: NodeId) -> bool {
+        let value = self.node(node);
+        let Some(state) = value.lookahead.as_ref() else { return false };
+        if !(state.needs_placement || state.subtree_needs_placement) || state.unplaced_layers != 0 {
+            return false;
+        }
+        !state.placed_by_parent
+            || value
+                .parent
+                .and_then(|parent| self.node(parent).lookahead.as_ref())
+                .is_some_and(|parent| !parent.placed)
+    }
+
+    /// `node`, placed now and passed over ahead, is placed ahead where it is now, and its blocks
+    /// ahead run, its subtree's with them: Compose's `MeasurePassDelegate.placeSelf` placing a
+    /// node that `needsToBePlacedInApproach` ahead first, at its position now, so content its
+    /// parent measures ahead but doesn't place there is still placed there (D2450).
+    #[cold]
+    #[inline(never)]
+    fn place_ahead_now(&mut self, node: NodeId) {
         let pass = self.lookahead_pass(node);
         pass.tree.place_pass(node);
         drop(pass);
@@ -446,7 +487,9 @@ impl UiTree {
             }
             current = parent.expect("just found");
         }
-        // The outermost is what the frame's placing has to reach.
+        // The outermost is what the frame's placing has to reach; `node` too, if the pass ahead
+        // doesn't place it and it's placed ahead as it's placed now (D2450).
+        self.note_placement_below(Some(node));
         self.note_placement_below(Some(current));
     }
 

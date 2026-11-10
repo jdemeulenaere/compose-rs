@@ -2380,3 +2380,106 @@ fn a_per_node_force_remeasure_runs_lookahead_placement_before_now_placement() {
     host.frame();
     assert!(log.borrow().is_empty(), "{:?}", log.borrow());
 }
+
+/// A layout placing its first child now only: ahead, it measures it and places nothing.
+fn placing_now_only(modifier: Modifier, content: impl Fn() + 'static) {
+    let policy = measure_policy(move |scope, measurables, constraints| {
+        let placeable = scope.measure(measurables[0], constraints);
+        let ahead = scope.is_looking_ahead();
+        scope.layout_with(placeable.width, placeable.height, move |placement| {
+            if !ahead {
+                placement.place(&placeable, 5, 0);
+            }
+        })
+    });
+    Layout(modifier, policy, callback(content));
+}
+
+/// A layout modifier that measures what's inside it ahead and places nothing there: what's inside
+/// its node is still placed ahead, as it's placed now, and its blocks ahead run again when what
+/// they read changes. Compose's `MeasurePassDelegate.placeSelf` places a node its parent's pass
+/// ahead passed over (`needsToBePlacedInApproach`) ahead first (D2450).
+#[test]
+fn content_a_modifier_doesn_t_place_ahead_is_placed_ahead_as_it_s_placed_now() {
+    let read = mutable_state_of(0);
+    let log: Log = Rc::default();
+    let (r, l) = (read.handle(), log.clone());
+    let mut host = host(move || {
+        let l = l.clone();
+        scoped(move |_| {
+            let l = l.clone();
+            let skipping = Modifier.layout(|scope, measurable, constraints| {
+                let placeable = scope.measure(measurable, constraints);
+                if scope.is_looking_ahead() {
+                    scope.layout_with(0, 0, |_| {})
+                } else {
+                    scope.layout_with(placeable.width, placeable.height, move |placement| {
+                        placement.place(&placeable, 0, 0);
+                    })
+                }
+            });
+            Stack!(modifier = skipping, {
+                let l = l.clone();
+                leaf(
+                    Modifier
+                        .layout(move |scope, measurable, constraints| {
+                            let placeable = scope.measure(measurable, constraints);
+                            let l = l.clone();
+                            scope.layout_with(placeable.width, placeable.height, move |placement| {
+                                let ahead = placement.is_looking_ahead();
+                                if ahead {
+                                    r.get();
+                                }
+                                l.borrow_mut().push(("place", ahead));
+                                placement.place(&placeable, 0, 0);
+                            })
+                        })
+                        .then(sized(10)),
+                );
+            });
+        });
+    });
+    assert_eq!(*log.borrow(), [("place", true), ("place", false)]);
+    log.borrow_mut().clear();
+    read.set(1);
+    host.frame();
+    // Both, as `a_state_read_placing_places_by_where_it_was_read`.
+    assert_eq!(*log.borrow(), [("place", true), ("place", false)]);
+}
+
+/// A layout that measures its child ahead and places it now only: the child is placed ahead too,
+/// first, as Compose's `needsToBePlacedInApproach` (D2450).
+#[test]
+fn a_child_its_parent_places_now_only_is_placed_ahead_first() {
+    let log: Log = Rc::default();
+    let l = log.clone();
+    let _host = host(move || {
+        let l = l.clone();
+        scoped(move |_| {
+            let l = l.clone();
+            placing_now_only(Modifier, move || leaf(noting(&l).then(sized(10))));
+        });
+    });
+    let placed: Vec<_> = log.borrow().iter().filter(|it| it.0 == "place").copied().collect();
+    assert_eq!(placed, [("place", true), ("place", false)]);
+}
+
+/// A child its parent places neither ahead nor now isn't placed ahead either: only being placed now
+/// places it ahead (D2450).
+#[test]
+fn a_child_placed_in_neither_pass_isn_t_placed_ahead() {
+    let log: Log = Rc::default();
+    let l = log.clone();
+    let _host = host(move || {
+        let l = l.clone();
+        scoped(move |_| {
+            let l = l.clone();
+            let policy = measure_policy(move |scope, measurables, constraints| {
+                scope.measure(measurables[0], constraints);
+                scope.layout_with(10, 10, |_| {})
+            });
+            Layout(Modifier, policy, callback(move || leaf(noting(&l).then(sized(10)))));
+        });
+    });
+    assert!(log.borrow().iter().all(|it| it.0 != "place"), "{:?}", log.borrow());
+}
