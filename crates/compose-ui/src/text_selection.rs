@@ -1525,6 +1525,19 @@ impl UiTree {
         }
     }
 
+    /// The selection's container and the texts of its ends map through the graphics layers
+    /// around them again, so those layers tell their moves to `refresh_handles_if_moved` (after
+    /// `position_listeners` moved, D2105).
+    pub(crate) fn note_selection_layers(&self) {
+        let Some(selection) = self.text_selection else { return };
+        for node in [selection.container, selection.anchor.node, selection.focus.node] {
+            if let Some(value) = self.get(node) {
+                let layer = value.layers.len() - 1;
+                self.map_to_root(node, layer, None, Offset::ZERO);
+            }
+        }
+    }
+
     /// Where `selection`'s container and the texts of its ends are now, in the root, with their
     /// sizes (graphics layers left out: their moves are told apart).
     fn handles_placed(&self, selection: &TextSelection) -> Option<HandlesPlacedFor> {

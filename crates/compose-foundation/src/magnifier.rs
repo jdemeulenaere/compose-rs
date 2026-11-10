@@ -240,8 +240,9 @@ pub(crate) struct MagnifierNode {
     /// The node's position in the root after its last layout, as Compose's
     /// `anchorPositionInRoot` (unspecified before).
     anchor_position_in_root: Offset,
-    /// Its position read from its coordinates at each update, not told after each layout: a
-    /// selection's magnifier delegated to during a gesture, which moves it at each move (D2073).
+    /// Its position also read from its coordinates at each update: a selection's magnifier
+    /// delegated to during a gesture, not told its position until the next layout or layer move
+    /// (D2073; told them since D2105).
     reads_position: bool,
     /// Where its source center is in the root, unspecified while it shows nothing: its
     /// semantics' (`MagnifierPositionInRoot`).
@@ -353,7 +354,13 @@ impl MagnifierNode {
     /// As `updateMagnifier`: shown where its centers say, or hidden while its source center or
     /// its position is unspecified. What the centers read is observed.
     fn update_magnifier(&mut self, context: &mut NodeContext<'_>) {
-        let density = *self.density.get_or_insert_with(|| context.require_density());
+        // The density the shown magnifier was made at; with none shown, the current one, so the
+        // centers and the one then made agree (D2107).
+        let density = if self.magnifier.borrow().is_none() {
+            *self.density.insert(context.require_density())
+        } else {
+            *self.density.get_or_insert_with(|| context.require_density())
+        };
         if self.reads_position {
             self.anchor_position_in_root = context.require_layout_coordinates().position_in_root();
         }
@@ -431,7 +438,7 @@ impl ModifierNode for MagnifierNode {
         Some(self)
     }
     fn as_global_position_aware(&mut self) -> Option<&mut dyn GlobalPositionAwareModifierNode> {
-        if self.reads_position { None } else { Some(self) }
+        Some(self)
     }
     fn as_observer(&mut self) -> Option<&mut dyn compose_ui::ObserverModifierNode> {
         Some(self)
@@ -469,10 +476,14 @@ impl ModifierNode for MagnifierNode {
         self.update_pending = None;
     }
     fn on_density_change(&mut self, context: &mut NodeContext<'_>) {
-        if self.magnifier.borrow().is_some() && self.density != Some(context.require_density()) {
-            self.recreate_magnifier(context);
-            self.update_magnifier(context);
+        if self.density == Some(context.require_density()) {
+            return;
         }
+        // A shown one is made anew; a hidden one's centers are asked again at the new density.
+        if self.magnifier.borrow().is_some() {
+            self.recreate_magnifier(context);
+        }
+        self.update_magnifier(context);
     }
 }
 

@@ -18,8 +18,8 @@ The log is split by area into the files below, one table each, rows in number or
 | File | Covers | Rows |
 |---|---|---|
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 182 |
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 468 |
-| [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 152 |
+| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 470 |
+| [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 155 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 121 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 34 |
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 31 |
@@ -1127,8 +1127,8 @@ The log is split by area into the files below, one table each, rows in number or
 | D2062 | [text](decisions/text.md#d2062) | revised by D2071 |
 | D2070 | [text](decisions/text.md#d2070) | current |
 | D2071 | [text](decisions/text.md#d2071) | current |
-| D2072 | [text](decisions/text.md#d2072) | current |
-| D2073 | [text](decisions/text.md#d2073) | current |
+| D2072 | [text](decisions/text.md#d2072) | revised by D2107 |
+| D2073 | [text](decisions/text.md#d2073) | revised by D2105 |
 | D2074 | [text](decisions/text.md#d2074) | current |
 | D2075 | [api-and-tooling](decisions/api-and-tooling.md#d2075) | current |
 | D2076 | [api-and-tooling](decisions/api-and-tooling.md#d2076) | current |
@@ -1136,3 +1136,8 @@ The log is split by area into the files below, one table each, rows in number or
 | D2078 | [api-and-tooling](decisions/api-and-tooling.md#d2078) | current |
 | D2079 | [api-and-tooling](decisions/api-and-tooling.md#d2079) | current |
 | D2080 | [api-and-tooling](decisions/api-and-tooling.md#d2080) | current |
+| D2100 | [ui-and-layout](decisions/ui-and-layout.md#d2100) | current |
+| D2101 | [ui-and-layout](decisions/ui-and-layout.md#d2101) | current |
+| D2105 | [text](decisions/text.md#d2105) | current |
+| D2106 | [text](decisions/text.md#d2106) | current |
+| D2107 | [text](decisions/text.md#d2107) | current |

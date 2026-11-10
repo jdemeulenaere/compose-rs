@@ -2257,8 +2257,14 @@ impl ModifierNodeElement for SharedBoundsElement {
                 node.locals.provide(&LOCAL_ENTRY, Some(EntryArg(self.entry.clone())));
                 if let Some(handle) = node.shared.handle.get() {
                     node.setup_from_handle(handle);
-                    handle.with_node::<SharedBoundsNode, _>(|node, context| {
-                        node.on_observed_reads_changed(context);
+                    // The rest of Compose's `setup()` and `onObservedReadsChanged()` needs the
+                    // node's context, which `update` (in the composition pass) hasn't: once the
+                    // pass is applied (D1355, D2101).
+                    handle.side_effect(move || {
+                        handle.with_node::<SharedBoundsNode, _>(|node, context| {
+                            node.setup(context);
+                            node.on_observed_reads_changed(context);
+                        });
                     });
                 }
             }
