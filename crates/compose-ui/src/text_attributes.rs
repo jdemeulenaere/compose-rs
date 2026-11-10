@@ -285,6 +285,12 @@ impl BaselineShift {
         !self.0.is_nan()
     }
 
+    /// Whether it moves the text, as Compose's internal `isApplicable`: neither `NONE` nor
+    /// unspecified, and finite. Only those are rendered.
+    pub fn is_applicable(self) -> bool {
+        self.0.is_finite() && self.0 != 0.0
+    }
+
     /// `self` if specified, else `other`, as `takeOrElse`.
     pub fn or(self, other: BaselineShift) -> BaselineShift {
         if self.is_specified() { self } else { other }

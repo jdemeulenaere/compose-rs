@@ -725,14 +725,16 @@ fn width_bounds(constraints: Constraints) -> (i32, i32) {
 
 /// The request `TextMeasurer.kt` reads: line options, then the base style, then the runs.
 ///
-/// Options: flags (u8: 1 soft wrap, 2 for intrinsic sizes only, 4 placeholders follow), max lines (u32), ellipsis (u8: 0
+/// Options: flags (u8: 1 soft wrap, 2 for intrinsic sizes only, 4 placeholders follow, 8 the font
+/// padding included, D2306), max lines (u32), ellipsis (u8: 0
 /// none, 1 at the end, 2 at the start, 3 in the middle), alignment (u8: 0 normal, 1
 /// opposite, 2 center, 3 justify), right to left (u8), min and max width (i32, max
 /// `i32::MAX` unbounded). A style: color (ARGB u32), font size (px f32), weight (u32), italic
 /// (u8), family (u8: 0 sans serif, 1 serif, 2 monospace, 3 cursive, 4 named, then its name's
 /// length and UTF-8 bytes, 5 a typeface, then its number), letter spacing (px f32), decoration (u8: 1 underline, 2 line
 /// through, and [`paint_extras_flags`]'s: what follows the style, [`encode_paint_extras`]), line
-/// height (px f32, 0 unset), background (ARGB u32, 0 none). Runs: their count
+/// height (px f32, 0 unset), how it's spread, background (ARGB u32, 0 none), the other attributes
+/// ([`encode_attributes`]). Runs: their count
 /// (u32), then each one's UTF-16 start and end (u32), what it takes from the paragraph's paint
 /// (u8: 1 its color, 2 its decoration: the ones its spans don't set) and style. Then the maximum
 /// height (i32). Last, with its flag, the placeholders: their count, then each one's UTF-16 start
@@ -758,7 +760,8 @@ fn encode_request(
         if options.overflow.is_ellipsis() && !options.soft_wrap { 1 } else { options.max_lines };
     out.u8(u8::from(options.soft_wrap)
         | (u8::from(probe) << 1)
-        | (u8::from(!placeholders.is_empty()) << 2));
+        | (u8::from(!placeholders.is_empty()) << 2)
+        | (u8::from(style.is_include_font_padding_enabled()) << 3));
     // A Java `int`: unlimited is `Integer.MAX_VALUE`, not -1.
     out.u32(max_lines.clamp(1, i32::MAX as u32));
     out.u8(match options.overflow {
@@ -957,20 +960,70 @@ fn encode_style(
         }
     }
     let px = |unit| compose_ui::platform::resolve_text_unit_px(unit, font_px, density);
-    out.f32(px(style.letter_spacing).unwrap_or(0.0));
+    let letter_spacing = compose_ui::platform::resolve_letter_spacing_px(style, font_px, density);
+    out.f32(letter_spacing.unwrap_or(0.0));
     out.u8(decoration | extras);
     out.f32(px(style.line_height).unwrap_or(0.0));
     // How the line height is spread, as Compose's `LineHeightStyleSpan`: the alignment's top
-    // ratio (-1 proportional) and the trim (1 the first line's top, 2 the last line's bottom).
-    // A style without one takes `LineHeightStyle.Default`, as Compose's `createCharSequence`
-    // (its plain `LineHeightSpan` is for `includeFontPadding`, which compose-rs doesn't have).
+    // ratio (-1 proportional) and the trim (1 the first line's top, 2 the last line's bottom;
+    // 4: Compose's plain `LineHeightSpan` instead, for `includeFontPadding` without a line
+    // height style, D2306). A style without one takes `LineHeightStyle.Default`, as Compose's
+    // `createCharSequence`.
     let line_height_style = style.line_height_style.unwrap_or(compose_ui::LineHeightStyle::DEFAULT);
     out.f32(line_height_style.alignment.top_ratio);
     let trim = line_height_style.trim;
-    out.u8(u8::from(trim.trims_first_line_top()) | (u8::from(trim.trims_last_line_bottom()) << 1));
+    let plain = style.is_include_font_padding_enabled() && style.line_height_style.is_none();
+    out.u8(u8::from(trim.trims_first_line_top())
+        | (u8::from(trim.trims_last_line_bottom()) << 1)
+        | (u8::from(plain) << 2));
     out.u32(if background.is_specified() { background.to_argb() } else { 0 });
+    encode_attributes(out, style);
     if extras != 0 {
         encode_paint_extras(out, style, extras);
+    }
+}
+
+/// What else of `style` Android renders (D2305), a byte saying which follow: 1 a geometric
+/// transform (scale and skew, f32), 2 a baseline shift (its multiplier of the font's ascent, f32),
+/// 4 font feature settings, 8 locales (each a length, u32, and UTF-8: CSS's feature settings, and
+/// language tags with commas), 16 a text motion (32 animated, else static). One zero byte for a
+/// style with none.
+fn encode_attributes(out: &mut Writer, style: &TextStyle) {
+    let transform = style
+        .text_geometric_transform
+        .filter(|transform| *transform != compose_ui::TextGeometricTransform::NONE);
+    let shift = style.baseline_shift.filter(|shift| shift.is_applicable());
+    let features = style.font_feature_settings.as_ref().filter(|settings| !settings.is_empty());
+    let locales = style.locale_list.as_ref().filter(|locales| !locales.is_empty());
+    let flags = u8::from(transform.is_some())
+        | u8::from(shift.is_some()) << 1
+        | u8::from(features.is_some()) << 2
+        | u8::from(locales.is_some()) << 3
+        | u8::from(style.text_motion.is_some()) << 4
+        | u8::from(style.text_motion == Some(compose_ui::TextMotion::Animated)) << 5;
+    out.u8(flags);
+    if let Some(transform) = transform {
+        out.f32(transform.scale_x);
+        out.f32(transform.skew_x);
+    }
+    if let Some(shift) = shift {
+        out.f32(shift.multiplier());
+    }
+    if let Some(features) = features {
+        out.u32(features.len() as u32);
+        out.bytes.extend_from_slice(features.as_bytes());
+    }
+    if let Some(locales) = locales {
+        let start = out.bytes.len();
+        out.u32(0);
+        for (index, locale) in locales.iter().enumerate() {
+            if index > 0 {
+                out.bytes.push(b',');
+            }
+            out.bytes.extend_from_slice(locale.to_language_tag().as_bytes());
+        }
+        let length = (out.bytes.len() - start - 4) as u32;
+        out.bytes[start..start + 4].copy_from_slice(&length.to_le_bytes());
     }
 }
 
@@ -1078,8 +1131,11 @@ mod tests {
     /// Where a plain style's decoration byte is in a request: the options, then a style's color,
     /// font size, weight, italic, family and letter spacing.
     const DECORATION_AT: usize = 16 + 4 + 4 + 4 + 1 + 1 + 4;
-    /// A request's length with a plain style and no runs.
-    const PLAIN_REQUEST: usize = DECORATION_AT + 1 + 4 + 4 + 1 + 4 + 4 + 4;
+    /// A request's length with a plain style and no runs: the decoration, line height and its
+    /// style, background, attributes (none), run count and maximum height.
+    const PLAIN_REQUEST: usize = DECORATION_AT + 1 + 4 + 4 + 1 + 4 + 1 + 4 + 4;
+    /// Where a plain style's attributes byte is in a request ([`encode_attributes`]).
+    const ATTRIBUTES_AT: usize = PLAIN_REQUEST - 9;
 
     fn request_of(style: &TextStyle) -> Vec<u8> {
         let mut measurer = AndroidTextMeasurer::new(Fake::default());
@@ -1472,18 +1528,18 @@ mod tests {
         let constraints = Constraints::new(0, 300, 0, 300);
         measurer.layout_annotated(&text, &style, options, constraints, &Density::new(1.0));
         let request = &measurer.backend.requests[0];
-        // 16 bytes of options, then the 32-byte base style (its color first: the paint's).
+        // 16 bytes of options, then the 33-byte base style (its color first: the paint's).
         assert_eq!(u32::from_le_bytes(request[16..20].try_into().unwrap()), Color::BLUE.to_argb());
         let u32_at = |at: usize| u32::from_le_bytes(request[at..at + 4].try_into().unwrap());
-        assert_eq!(u32_at(48), 2, "two runs");
-        // Each run: its range, what it takes from the paint, its style (32 bytes).
+        assert_eq!(u32_at(49), 2, "two runs");
+        // Each run: its range, what it takes from the paint, its style (33 bytes).
         assert_eq!(
-            (u32_at(52), u32_at(56), request[60]),
+            (u32_at(53), u32_at(57), request[61]),
             (0, 3, 0b11),
             "the paint's color and decoration"
         );
-        assert_eq!((u32_at(93), u32_at(97), request[101]), (3, 6, 0b10), "its own color");
-        assert_eq!(u32_at(102), Color::RED.to_argb());
+        assert_eq!((u32_at(95), u32_at(99), request[103]), (3, 6, 0b10), "its own color");
+        assert_eq!(u32_at(104), Color::RED.to_argb());
     }
 
     /// A style's line height style follows its line height (D571): the alignment's top ratio and
@@ -1557,8 +1613,8 @@ mod tests {
         let blue = Color::from_argb(0x1234_5678);
         let style = TextStyle { background: blue, ..TextStyle::DEFAULT };
         let request = request_of(&style);
-        assert_eq!(u32_at(&request, PLAIN_REQUEST - 12), blue.to_argb());
-        assert_eq!(u32_at(&request_of(&TextStyle::DEFAULT), PLAIN_REQUEST - 12), 0);
+        assert_eq!(u32_at(&request, PLAIN_REQUEST - 13), blue.to_argb());
+        assert_eq!(u32_at(&request_of(&TextStyle::DEFAULT), PLAIN_REQUEST - 13), 0);
 
         let spanned = AnnotatedString::build(|builder| {
             builder.with_style(
@@ -1607,11 +1663,185 @@ mod tests {
         );
         let request = measurer.backend.requests.remove(0);
         // The base style's background, then two runs, each ending with its background.
-        assert_eq!(u32_at(&request, PLAIN_REQUEST - 12), blue.to_argb());
+        assert_eq!(u32_at(&request, PLAIN_REQUEST - 13), blue.to_argb());
         let runs = paint_free_runs(&spanned, &style);
         assert_eq!(runs.iter().map(|run| run.2).collect::<Vec<_>>(), [Color::TRANSPARENT, blue]);
         let resolved =
             TextStyle::resolve_defaults(&TextStyle::DEFAULT, compose_ui::LayoutDirection::Ltr);
-        assert_eq!(u32_at(&request_of(&resolved), PLAIN_REQUEST - 12), 0);
+        assert_eq!(u32_at(&request_of(&resolved), PLAIN_REQUEST - 13), 0);
+    }
+
+    #[test]
+    fn attributes_encode_transform_shift_features_locales_and_motion() {
+        use compose_ui::{BaselineShift, LocaleList, TextGeometricTransform, TextMotion, UnitExt};
+        let style = TextStyle {
+            font_size: 20.0.sp(),
+            text_geometric_transform: Some(TextGeometricTransform { scale_x: 0.5, skew_x: 0.25 }),
+            baseline_shift: Some(BaselineShift::SUBSCRIPT),
+            font_feature_settings: Some("\"kern\" 0".into()),
+            locale_list: Some(LocaleList::from_language_tags("en-US,ja-JP")),
+            text_motion: Some(TextMotion::Animated),
+            letter_spacing: 2.0.em(),
+            ..TextStyle::DEFAULT
+        };
+        let request = request_of(&style);
+        assert_eq!(request[ATTRIBUTES_AT], 1 | 2 | 4 | 8 | 16 | 32);
+        // Letter spacing in em is scaled by scaleX (2 * 20 * 0.5 = 20 px).
+        assert_eq!(f32_at(&request, DECORATION_AT - 4), 20.0);
+        let at = ATTRIBUTES_AT + 1;
+        assert_eq!(f32_at(&request, at), 0.5);
+        assert_eq!(f32_at(&request, at + 4), 0.25);
+        assert_eq!(f32_at(&request, at + 8), -0.5);
+        let feat_len = u32_at(&request, at + 12) as usize;
+        assert_eq!(&request[at + 16..at + 16 + feat_len], b"\"kern\" 0");
+        let loc_at = at + 16 + feat_len;
+        let loc_len = u32_at(&request, loc_at) as usize;
+        assert_eq!(&request[loc_at + 4..loc_at + 4 + loc_len], b"en-US,ja-JP");
+
+        let still = TextStyle { text_motion: Some(TextMotion::Static), ..TextStyle::DEFAULT };
+        assert_eq!(request_of(&still)[ATTRIBUTES_AT], 16);
+
+        // None/default/inapplicable values encode a single zero attribute byte.
+        for empty in [
+            TextStyle {
+                text_geometric_transform: Some(TextGeometricTransform::NONE),
+                baseline_shift: Some(BaselineShift::NONE),
+                font_feature_settings: Some("".into()),
+                locale_list: Some(LocaleList::empty()),
+                ..TextStyle::DEFAULT
+            },
+            TextStyle { baseline_shift: Some(BaselineShift::UNSPECIFIED), ..TextStyle::DEFAULT },
+            TextStyle { baseline_shift: Some(BaselineShift(f32::INFINITY)), ..TextStyle::DEFAULT },
+            TextStyle {
+                baseline_shift: Some(BaselineShift(f32::NEG_INFINITY)),
+                ..TextStyle::DEFAULT
+            },
+        ] {
+            let req = request_of(&empty);
+            assert_eq!(req[ATTRIBUTES_AT], 0);
+            assert_eq!(req.len(), PLAIN_REQUEST);
+        }
+    }
+
+    #[test]
+    fn include_font_padding_sets_option_and_plain_line_height_flag() {
+        use compose_ui::{LineHeightStyle, PlatformTextStyle, UnitExt};
+        let with_pad = TextStyle {
+            font_size: 20.0.sp(),
+            line_height: 30.0.sp(),
+            platform_style: Some(PlatformTextStyle::with_include_font_padding(true)),
+            ..TextStyle::DEFAULT
+        };
+        let request = request_of(&with_pad);
+        assert_eq!(request[0] & 8, 8);
+        assert_eq!(request[DECORATION_AT + 9] & 4, 4);
+
+        let with_style =
+            TextStyle { line_height_style: Some(LineHeightStyle::DEFAULT), ..with_pad.clone() };
+        let request = request_of(&with_style);
+        assert_eq!(request[0] & 8, 8);
+        assert_eq!(request[DECORATION_AT + 9] & 4, 0);
+
+        let without_pad = TextStyle {
+            platform_style: Some(PlatformTextStyle::with_include_font_padding(false)),
+            ..with_pad
+        };
+        let request = request_of(&without_pad);
+        assert_eq!(request[0] & 8, 0);
+        assert_eq!(request[DECORATION_AT + 9] & 4, 0);
+    }
+
+    #[test]
+    fn run_attributes_encode_stacked_shift_transform_features_and_overwritten_locales() {
+        use compose_ui::{BaselineShift, LocaleList, SpanStyle, TextGeometricTransform};
+        let spanned = AnnotatedString::build(|builder| {
+            builder.with_style(
+                SpanStyle {
+                    baseline_shift: Some(BaselineShift::SUBSCRIPT),
+                    locale_list: Some(LocaleList::from_language_tags("en-US")),
+                    text_geometric_transform: Some(TextGeometricTransform {
+                        scale_x: 0.5,
+                        skew_x: 0.25,
+                    }),
+                    ..SpanStyle::DEFAULT
+                },
+                |builder| {
+                    builder.with_style(
+                        SpanStyle {
+                            baseline_shift: Some(BaselineShift::SUPERSCRIPT),
+                            locale_list: Some(LocaleList::from_language_tags("ja-JP")),
+                            text_geometric_transform: Some(TextGeometricTransform {
+                                scale_x: 2.0,
+                                skew_x: 0.5,
+                            }),
+                            font_feature_settings: Some("\"liga\" 0".into()),
+                            ..SpanStyle::DEFAULT
+                        },
+                        |builder| {
+                            builder.append("ab");
+                        },
+                    );
+                    builder.append("cd");
+                },
+            );
+        });
+        let mut measurer = AndroidTextMeasurer::new(Fake::default());
+        measurer.layout_annotated(
+            &spanned,
+            &TextStyle::DEFAULT,
+            TextLayoutOptions::default(),
+            Constraints::unbounded(),
+            &Density::new(1.0),
+        );
+        let request = &measurer.backend.requests[0];
+        let runs_at = PLAIN_REQUEST - 8;
+        assert_eq!(u32_at(request, runs_at), 2);
+        // Run 0: shift cancelled (-0.5 + 0.5 = 0 -> no shift bit), transform combined (1.0, 0.75),
+        // features + locale overwritten to "ja-JP".
+        let r0_attrs = runs_at + 4 + 4 + 4 + 1 + (ATTRIBUTES_AT - 16);
+        assert_eq!(request[r0_attrs], 1 | 4 | 8);
+        assert_eq!(f32_at(request, r0_attrs + 1), 1.0);
+        assert_eq!(f32_at(request, r0_attrs + 5), 0.75);
+        let feat_len = u32_at(request, r0_attrs + 9) as usize;
+        assert_eq!(&request[r0_attrs + 13..r0_attrs + 13 + feat_len], b"\"liga\" 0");
+        let loc_at = r0_attrs + 13 + feat_len;
+        let loc_len = u32_at(request, loc_at) as usize;
+        assert_eq!(&request[loc_at + 4..loc_at + 4 + loc_len], b"ja-JP");
+
+        // Run 1: shift -0.5, transform (0.5, 0.25), locale "en-US".
+        let r1_attrs = loc_at + 4 + loc_len + 4 + 4 + 1 + (ATTRIBUTES_AT - 16);
+        assert_eq!(request[r1_attrs], 1 | 2 | 8);
+        assert_eq!(f32_at(request, r1_attrs + 1), 0.5);
+        assert_eq!(f32_at(request, r1_attrs + 5), 0.25);
+        assert_eq!(f32_at(request, r1_attrs + 9), -0.5);
+    }
+
+    #[test]
+    fn review_zero_and_non_finite_scale_x_encode_finite_letter_spacing() {
+        use compose_ui::{TextGeometricTransform, UnitExt};
+        let zero_em = TextStyle {
+            font_size: 20.0.sp(),
+            letter_spacing: 2.0.em(),
+            text_geometric_transform: Some(TextGeometricTransform { scale_x: 0.0, skew_x: 0.0 }),
+            ..TextStyle::DEFAULT
+        };
+        let req = request_of(&zero_em);
+        assert_eq!(f32_at(&req, DECORATION_AT - 4), 0.0);
+
+        let zero_sp = TextStyle { letter_spacing: 5.0.sp(), ..zero_em };
+        let req = request_of(&zero_sp);
+        assert_eq!(f32_at(&req, DECORATION_AT - 4), 5.0);
+
+        let nan_em = TextStyle {
+            font_size: 20.0.sp(),
+            letter_spacing: 2.0.em(),
+            text_geometric_transform: Some(TextGeometricTransform {
+                scale_x: f32::NAN,
+                skew_x: 0.0,
+            }),
+            ..TextStyle::DEFAULT
+        };
+        let req = request_of(&nan_em);
+        assert_eq!(f32_at(&req, DECORATION_AT - 4), 40.0);
     }
 }

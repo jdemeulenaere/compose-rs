@@ -1,6 +1,7 @@
 //! A text style's platform part, as Compose's Android `PlatformTextStyle`,
 //! `PlatformParagraphStyle`, `PlatformSpanStyle` and `EmojiSupportMatch`: the model, with
-//! Compose's merge and lerp. compose-rs's measurers never include the font padding.
+//! Compose's merge and lerp. Android's measurer honours `include_font_padding`; desktop's has
+//! none, as Compose Desktop's (D2306).
 
 use compose_runtime::ComposeArg;
 

@@ -709,6 +709,77 @@ pub fn resolve_text_unit_px(unit: TextUnit, font_px: f32, density: &Density) -> 
     }
 }
 
+/// `style`'s letter spacing in pixels in text `font_px` pixels high: an `em` spacing of the
+/// font's size as its geometric transform scales it horizontally, as Android's (Minikin spaces
+/// by `letterSpacing × size × scaleX`); an `sp` one as it is (Compose divides it by both).
+pub fn resolve_letter_spacing_px(
+    style: &TextStyle,
+    font_px: f32,
+    density: &Density,
+) -> Option<f32> {
+    let scale_x = style
+        .text_geometric_transform
+        .map(|transform| transform.scale_x)
+        .filter(|scale_x| scale_x.is_finite())
+        .unwrap_or(1.0);
+    resolve_text_unit_px(style.letter_spacing, font_px * scale_x, density)
+}
+
+/// How far `style`'s baseline shift moves its text down, in pixels (up when negative), in a
+/// font of `ascent` (negative, in pixels, as a paint's `ascent()`): as Compose's
+/// `BaselineShiftSpan`, the ascent times the multiplier rounded up; none unless applicable.
+pub fn resolve_baseline_shift_px(style: &TextStyle, ascent: f32) -> f32 {
+    match style.baseline_shift {
+        Some(shift) if shift.is_applicable() => (ascent * shift.multiplier()).ceil(),
+        _ => 0.0,
+    }
+}
+
+/// The OpenType features `settings` names, as Android's `Paint.setFontFeatureSettings` reads
+/// them (Minikin's `parseFontFeatureSettings`, each comma-separated entry through HarfBuzz's
+/// `hb_feature_from_string`): CSS's `"tag" value` (a number, `on` or `off`; 1 if none), and
+/// HarfBuzz's `tag`, `+tag`, `-tag` and `tag=value`; a tag of up to four letters, padded with
+/// spaces. What doesn't parse (a range of characters included) is left out.
+pub fn font_features(settings: &str) -> Vec<([u8; 4], i32)> {
+    settings.split(',').filter_map(font_feature).collect()
+}
+
+fn font_feature(feature: &str) -> Option<([u8; 4], i32)> {
+    let mut rest = feature.trim();
+    let mut value = 1;
+    if let Some(after) = rest.strip_prefix('-') {
+        (rest, value) = (after, 0);
+    } else if let Some(after) = rest.strip_prefix('+') {
+        rest = after;
+    }
+    let (name, after) = match rest.chars().next() {
+        Some(quote @ ('"' | '\'')) => {
+            let end = rest[1..].find(quote)? + 1;
+            (&rest[1..end], &rest[end + 1..])
+        }
+        _ => {
+            let end =
+                rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(rest.len());
+            (&rest[..end], &rest[end..])
+        }
+    };
+    if name.is_empty() || name.len() > 4 || !name.bytes().all(|byte| (0x20..=0x7E).contains(&byte))
+    {
+        return None;
+    }
+    let mut tag = [b' '; 4];
+    tag[..name.len()].copy_from_slice(name.as_bytes());
+    let after = after.trim();
+    let after = after.strip_prefix('=').map_or(after, str::trim);
+    match after {
+        "" => {}
+        "on" => value = 1,
+        "off" => value = 0,
+        number => value = number.parse::<u32>().ok()?.min(i32::MAX as u32) as i32,
+    }
+    Some((tag, value))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -719,5 +790,69 @@ mod tests {
         let b: SharedString = "abc".into();
         assert!(a.same(&b) && a == b);
         assert!(a.same(&a.clone()));
+    }
+
+    #[test]
+    fn font_features_parses_css_and_harfbuzz_settings() {
+        assert_eq!(
+            font_features("\"kern\" 0, 'smcp' on, \"liga\" off, \"aalt\" 3"),
+            vec![(*b"kern", 0), (*b"smcp", 1), (*b"liga", 0), (*b"aalt", 3)]
+        );
+        assert_eq!(
+            font_features("-liga, +kern, tnum=1, c2sc, \"a\" 2"),
+            vec![(*b"liga", 0), (*b"kern", 1), (*b"tnum", 1), (*b"c2sc", 1), (*b"a   ", 2)]
+        );
+        assert_eq!(
+            font_features("invalid_long, \"\", \"kern\" -1, \"liga\" 0"),
+            vec![(*b"liga", 0)]
+        );
+    }
+
+    #[test]
+    fn resolve_baseline_shift_and_letter_spacing_with_scale_x() {
+        use crate::text_attributes::{BaselineShift, TextGeometricTransform};
+        use crate::unit::UnitExt;
+        assert_eq!(resolve_baseline_shift_px(&TextStyle::DEFAULT, -16.0), 0.0);
+        assert_eq!(
+            resolve_baseline_shift_px(
+                &TextStyle {
+                    baseline_shift: Some(BaselineShift::SUPERSCRIPT),
+                    ..TextStyle::DEFAULT
+                },
+                -15.0
+            ),
+            -7.0
+        );
+        assert_eq!(
+            resolve_baseline_shift_px(
+                &TextStyle { baseline_shift: Some(BaselineShift::SUBSCRIPT), ..TextStyle::DEFAULT },
+                -15.0
+            ),
+            8.0
+        );
+        for non_shift in [
+            BaselineShift::NONE,
+            BaselineShift::UNSPECIFIED,
+            BaselineShift(f32::INFINITY),
+            BaselineShift(f32::NEG_INFINITY),
+        ] {
+            assert_eq!(
+                resolve_baseline_shift_px(
+                    &TextStyle { baseline_shift: Some(non_shift), ..TextStyle::DEFAULT },
+                    -16.0
+                ),
+                0.0
+            );
+        }
+
+        let density = Density::new(2.0);
+        let scaled = TextStyle {
+            text_geometric_transform: Some(TextGeometricTransform { scale_x: 0.5, skew_x: 0.0 }),
+            letter_spacing: 2.0.em(),
+            ..TextStyle::DEFAULT
+        };
+        assert_eq!(resolve_letter_spacing_px(&scaled, 20.0, &density), Some(20.0));
+        let scaled_sp = TextStyle { letter_spacing: 5.0.sp(), ..scaled };
+        assert_eq!(resolve_letter_spacing_px(&scaled_sp, 20.0, &density), Some(10.0));
     }
 }

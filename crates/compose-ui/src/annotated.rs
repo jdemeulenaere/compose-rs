@@ -16,7 +16,7 @@ use crate::graphics::{Color, CornerSize, DrawStyle, Shape};
 use crate::paragraph_style::ParagraphStyle;
 use crate::span_style::SpanStyle;
 use crate::text::SharedString;
-use crate::text_attributes::TextIndent;
+use crate::text_attributes::{BaselineShift, TextGeometricTransform, TextIndent};
 use crate::text_style::TextStyle;
 use crate::unit::{TextUnit, TextUnitType};
 
@@ -716,9 +716,20 @@ impl AnnotatedString {
                         bound(*start) <= range.start && range.end <= bound(*end)
                     })
                 };
-                let style = covering().fold(style.clone(), |style, (span, _, _)| {
-                    style.merge_span_style(&relative_to(span, &style))
+                // A baseline shift and a geometric transform add up over the spans covering a
+                // run, as Android's spans over the paragraph's paint do (D2300).
+                let mut shift = AccumulatedShift::of(style);
+                let mut transform = style.text_geometric_transform;
+                let mut style = covering().fold(style.clone(), |style, (span, _, _)| {
+                    let span = relative_to(span, &style);
+                    shift.add(&style, span.baseline_shift);
+                    transform = combined_transform(transform, span.text_geometric_transform);
+                    style.merge_span_style(&span)
                 });
+                if let Some(baseline_shift) = shift.over(&style) {
+                    style.baseline_shift = baseline_shift;
+                }
+                style.text_geometric_transform = transform;
                 let background = style.background;
                 (range, style, background)
             })
@@ -767,6 +778,71 @@ pub(crate) fn intersect(l_start: usize, l_end: usize, r_start: usize, r_end: usi
 
 /// `span` with an `em` font size made relative to `style`'s, as Android's `RelativeSizeSpan`
 /// scales the size it's applied over (an unset size being 14 sp).
+/// A run's baseline shift as Android's spans give it (D2300): each applicable shift (Compose's
+/// `BaselineShiftSpan`, the paragraph's first, as its fallback span) moves the text by the
+/// font's ascent at the size before it times its multiplier, and they add up. Kept in sp times
+/// multiplier, as one multiplier of the run's own font size at the end, so a measurer shifts by
+/// its ascent once (Compose rounds each span's up; this rounds the sum).
+struct AccumulatedShift {
+    sp_times_multiplier: f32,
+    any: bool,
+}
+
+impl AccumulatedShift {
+    fn of(style: &TextStyle) -> AccumulatedShift {
+        let mut shift = AccumulatedShift { sp_times_multiplier: 0.0, any: false };
+        shift.add(style, style.baseline_shift);
+        shift
+    }
+
+    /// `baseline_shift` of a span over `style`: at `style`'s font size, as Compose sets a
+    /// span style's `BaselineShiftSpan` before its font size's span.
+    fn add(&mut self, style: &TextStyle, baseline_shift: Option<BaselineShift>) {
+        if let Some(shift) = baseline_shift.filter(|shift| shift.is_applicable()) {
+            self.sp_times_multiplier += font_size_sp(style.font_size) * shift.multiplier();
+            self.any = true;
+        }
+    }
+
+    /// The shift as a multiplier of `style`'s font size, if any span shifts; `None` inside
+    /// when they cancel out or the font has no size.
+    fn over(&self, style: &TextStyle) -> Option<Option<BaselineShift>> {
+        if !self.any {
+            return None;
+        }
+        let size = font_size_sp(style.font_size);
+        let multiplier = self.sp_times_multiplier / size;
+        Some((size > 0.0 && multiplier != 0.0).then_some(BaselineShift(multiplier)))
+    }
+}
+
+/// `size` in sp: an `em` size of the default's, unspecified the default.
+fn font_size_sp(size: TextUnit) -> f32 {
+    let default = crate::text::DEFAULT_FONT_SIZE.value();
+    if size.is_sp() {
+        size.value()
+    } else if size.is_em() {
+        size.value() * default
+    } else {
+        default
+    }
+}
+
+/// `inner` then `outer`, as Android applies a `ScaleXSpan` (scales multiply) and Compose's
+/// `SkewXSpan` (skews add) over the paint's (D2300).
+fn combined_transform(
+    inner: Option<TextGeometricTransform>,
+    outer: Option<TextGeometricTransform>,
+) -> Option<TextGeometricTransform> {
+    match (inner, outer) {
+        (Some(inner), Some(outer)) => Some(TextGeometricTransform {
+            scale_x: inner.scale_x * outer.scale_x,
+            skew_x: inner.skew_x + outer.skew_x,
+        }),
+        (inner, outer) => outer.or(inner),
+    }
+}
+
 fn relative_to<'a>(span: &'a SpanStyle, style: &TextStyle) -> std::borrow::Cow<'a, SpanStyle> {
     if !span.font_size.is_em() {
         return std::borrow::Cow::Borrowed(span);

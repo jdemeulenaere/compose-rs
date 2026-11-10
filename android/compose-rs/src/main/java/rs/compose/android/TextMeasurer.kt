@@ -13,6 +13,7 @@ import android.graphics.SweepGradient
 import android.graphics.Typeface
 import android.graphics.text.LineBreaker
 import android.os.Build
+import android.os.LocaleList
 import android.os.Trace
 import android.text.BoringLayout
 import android.text.Layout
@@ -92,6 +93,15 @@ internal class TextMeasurer(
         val typeface: Int,
         val letterSpacingPx: Float,
         val decoration: Int,
+        /** A geometric transform's, as Compose's `ScaleXSpan` and `SkewXSpan` (D2305). */
+        val scaleX: Float = 1f,
+        val skewX: Float = 0f,
+        /** CSS's font feature settings, as Compose's `FontFeatureSpan`; null: none. */
+        val fontFeatures: String? = null,
+        /** Language tags with commas, as Compose's `LocaleSpan`; null: the paragraph's. */
+        val locales: String? = null,
+        /** A text motion, as Compose's `setTextMotion`: 0 unset (static), 1 static, 2 animated. */
+        val motion: Int = 0,
     )
 
     /**
@@ -100,7 +110,16 @@ internal class TextMeasurer(
      * trimmed. Rust sends `LineHeightStyle.Default` (proportional, both trimmed) for a style
      * without one, as Compose's `createCharSequence` applies it (D571).
      */
-    private data class LineHeightStyle(val topRatio: Float, val trimFirstLineTop: Boolean, val trimLastLineBottom: Boolean)
+    private data class LineHeightStyle(
+        val topRatio: Float,
+        val trimFirstLineTop: Boolean,
+        val trimLastLineBottom: Boolean,
+        /**
+         * Compose's plain `LineHeightSpan` instead, as it takes for `includeFontPadding` without a
+         * line height style (D2306).
+         */
+        val plain: Boolean = false,
+    )
 
     /** A text style, as the request encodes it: its paint's part, and the spans'. */
     private class Style(
@@ -109,6 +128,8 @@ internal class TextMeasurer(
         val lineHeightStyle: LineHeightStyle,
         val background: Int,
         val extras: PaintExtras?,
+        /** A multiplier of the font's ascent the text moves by, as Compose's `BaselineShiftSpan`; 0 none. */
+        val baselineShift: Float = 0f,
     )
 
     /**
@@ -332,6 +353,21 @@ internal class TextMeasurer(
         val typeface = if (family == 5) request.getInt() else -1
         val letterSpacingPx = request.float()
         val decoration = request.get().toInt()
+        val lineHeightPx = request.float()
+        val topRatio = request.float()
+        val trim = request.get().toInt()
+        val lineHeightStyle = LineHeightStyle(
+            topRatio, trimFirstLineTop = trim and 1 != 0, trimLastLineBottom = trim and 2 != 0, plain = trim and 4 != 0,
+        )
+        val background = request.getInt()
+        // What Rust's `encode_attributes` says follow (D2305).
+        val attributes = request.get().toInt()
+        val scaleX = if (attributes and 1 != 0) request.float() else 1f
+        val skewX = if (attributes and 1 != 0) request.float() else 0f
+        val baselineShift = if (attributes and 2 != 0) request.float() else 0f
+        val fontFeatures = if (attributes and 4 != 0) readString(request) else null
+        val locales = if (attributes and 8 != 0) readString(request) else null
+        val motion = if (attributes and 16 == 0) 0 else if (attributes and 32 != 0) 2 else 1
         val paint = PaintStyle(
             color = color,
             fontPx = fontPx,
@@ -342,13 +378,20 @@ internal class TextMeasurer(
             typeface = typeface,
             letterSpacingPx = letterSpacingPx,
             decoration = decoration and 3,
+            scaleX = scaleX,
+            skewX = skewX,
+            fontFeatures = fontFeatures,
+            locales = locales,
+            motion = motion,
         )
-        val lineHeightPx = request.float()
-        val topRatio = request.float()
-        val trim = request.get().toInt()
-        val lineHeightStyle = LineHeightStyle(topRatio, trimFirstLineTop = trim and 1 != 0, trimLastLineBottom = trim and 2 != 0)
-        val background = request.getInt()
-        return Style(paint, lineHeightPx, lineHeightStyle, background, readExtras(request, decoration))
+        return Style(paint, lineHeightPx, lineHeightStyle, background, readExtras(request, decoration), baselineShift)
+    }
+
+    /** A length (u32) and that many bytes of UTF-8. */
+    private fun readString(request: ByteBuffer): String {
+        val bytes = ByteArray(request.getInt())
+        request.get(bytes)
+        return String(bytes, Charsets.UTF_8)
     }
 
     /** Applies a font's variation settings, as Compose's `setFontVariationSettings`. */
@@ -467,9 +510,35 @@ internal class TextMeasurer(
         paint.color = style.color
         paint.textSize = style.fontPx
         paint.typeface = typeface(style)
-        paint.letterSpacing = if (style.fontPx > 0f) style.letterSpacingPx / style.fontPx else 0f
+        paint.textScaleX = style.scaleX
+        paint.textSkewX = style.skewX
+        // In ems of the scaled size, as Compose's `applySpanStyle` sets an sp spacing.
+        val em = style.fontPx * style.scaleX
+        paint.letterSpacing = if (em != 0f && em.isFinite()) style.letterSpacingPx / em else 0f
         paint.isUnderlineText = style.decoration and 1 != 0
         paint.isStrikeThruText = style.decoration and 2 != 0
+        paint.fontFeatureSettings = style.fontFeatures
+        if (style.locales != null) paint.textLocales = localeList(style.locales)
+        applyMotion(paint, style.motion)
+    }
+
+    /** [tags]' locales, kept: a paint's are compared by identity when spans change them. */
+    private fun localeList(tags: String): LocaleList = localeLists.getOrPut(tags) {
+        val list = LocaleList.forLanguageTags(tags)
+        if (list.isEmpty) LocaleList.getDefault() else list
+    }
+
+    private val localeLists = HashMap<String, LocaleList>()
+
+    /** As Compose's `setTextMotion` (unset: static, as Compose's default). */
+    private fun applyMotion(paint: TextPaint, motion: Int) {
+        if (motion == 2) {
+            paint.flags = paint.flags or TextPaint.SUBPIXEL_TEXT_FLAG or TextPaint.LINEAR_TEXT_FLAG
+            paint.hinting = TextPaint.HINTING_OFF
+        } else {
+            paint.flags = paint.flags and (TextPaint.SUBPIXEL_TEXT_FLAG or TextPaint.LINEAR_TEXT_FLAG).inv()
+            paint.hinting = TextPaint.HINTING_ON
+        }
     }
 
     /**
@@ -482,6 +551,8 @@ internal class TextMeasurer(
         private val ownColor: Boolean,
         private val ownDecoration: Boolean,
         private val extras: PaintExtras?,
+        /** Its baseline shift's multiplier, all its spans' (Rust adds them up, D2300); 0 none. */
+        private val baselineShift: Float = 0f,
     ) : MetricAffectingSpan() {
         override fun updateDrawState(paint: TextPaint) {
             applyRun(paint)
@@ -501,6 +572,20 @@ internal class TextMeasurer(
                 paint.isUnderlineText = underline
                 paint.isStrikeThruText = strike
             }
+            // As Compose's `BaselineShiftSpan`, in the run's own font. A `Layout` resets the
+            // paragraph paint's, so it's a span's.
+            paint.baselineShift = if (baselineShift != 0f) ceil(paint.ascent() * baselineShift).toInt() else 0
+        }
+    }
+
+    /** A paragraph's own baseline shift over its whole text, as Compose's `BaselineShiftSpan`. */
+    private class BaselineShiftSpan(private val multiplier: Float) : MetricAffectingSpan() {
+        override fun updateMeasureState(paint: TextPaint) {
+            paint.baselineShift += ceil(paint.ascent() * multiplier).toInt()
+        }
+
+        override fun updateDrawState(paint: TextPaint) {
+            paint.baselineShift += ceil(paint.ascent() * multiplier).toInt()
         }
     }
 
@@ -537,6 +622,8 @@ internal class TextMeasurer(
          * Measured once, at the first layout, as Compose's `finalConstraints` reads it.
          */
         val maxIntrinsicWidth: Float,
+        /** Lines make room for the font's top and bottom, as Compose's `includeFontPadding` (D2306). */
+        val includePad: Boolean = false,
     ) {
         /** What the paint has beyond its color and decoration, for the drawing. */
         var extras: PaintExtras? = null
@@ -564,7 +651,7 @@ internal class TextMeasurer(
             val style = paintStyle.copy(color = color, decoration = decoration)
             val painted = Intrinsics(
                 content, style, this@TextMeasurer.paint(style), direction, boring, lineHeight, lineHeightStyle, letterSpaced,
-                softWrap, maxLines, ellipsis, align, boringWidth, maxIntrinsicWidth,
+                softWrap, maxLines, ellipsis, align, boringWidth, maxIntrinsicWidth, includePad,
             )
             painted.placeholders = placeholders
             painted.runBrush = runBrush
@@ -586,6 +673,8 @@ internal class TextMeasurer(
         val flags = request.get().toInt()
         val softWrap = flags and 1 != 0
         val hasPlaceholders = flags and 4 != 0
+        // Lines make room for the font's tallest glyphs, as Compose's `includeFontPadding` (D2306).
+        val includePad = flags and 8 != 0
         // For an intrinsic probe only: measured, never drawn, so not recorded ahead (D556).
         val probe = flags and 2 != 0
         val maxLines = request.getInt()
@@ -605,10 +694,17 @@ internal class TextMeasurer(
         var letterSpaced = paint.letterSpacing != 0f
         var runBrush = false
         val baseBackground = base.background != 0 && text.isNotEmpty()
-        val content: CharSequence = if (runCount == 0 && !hasPlaceholders && !baseBackground) {
+        val baseShift = base.baselineShift != 0f && text.isNotEmpty()
+        // `BoringLayout` ignores `TextPaint.baselineShift` in its line metrics (only `StaticLayout`
+        // widens `ascent`/`descent` for it), as Compose's `TextLayout` (`!hasBaselineShiftSpans`).
+        var baselineShifted = baseShift
+        val content: CharSequence = if (runCount == 0 && !hasPlaceholders && !baseBackground && !baseShift) {
             text
         } else {
             val spannable = SpannableString(text)
+            if (runCount == 0 && baseShift) {
+                spannable.setSpan(BaselineShiftSpan(base.baselineShift), 0, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
             if (runCount == 0 && baseBackground) {
                 spannable.setSpan(
                     BackgroundColorSpan(base.background),
@@ -625,9 +721,11 @@ internal class TextMeasurer(
                 if (start < end) {
                     val span = RunSpan(
                         style.paint, ownColor = inherits and 1 == 0, ownDecoration = inherits and 2 == 0, style.extras,
+                        style.baselineShift,
                     )
                     spannable.setSpan(span, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    if (style.paint.fontPx > 0f && style.paint.letterSpacingPx != 0f) letterSpaced = true
+                    if (style.baselineShift != 0f) baselineShifted = true
+                    if ((style.paint.fontPx * style.paint.scaleX).let { it != 0f && it.isFinite() } && style.paint.letterSpacingPx != 0f) letterSpaced = true
                     if (style.extras?.brush != null) runBrush = true
                     if (style.background != 0) {
                         spannable.setSpan(
@@ -664,7 +762,7 @@ internal class TextMeasurer(
         // desktop measurer: alignment and the cursor's movement agree with what's drawn.
         val direction = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR
         // One line of left-to-right text has boring metrics (D330): its width, in one measure.
-        val boring = boringMetrics(content, paint, direction, lineHeight, base.lineHeightStyle)
+        val boring = if (baselineShifted) null else boringMetrics(content, paint, direction, lineHeight, base.lineHeightStyle)
         val boringWidth = if (boring == null) 0f else intrinsicWidth(boring.width.toFloat(), letterSpaced)
         val maxIntrinsicWidth = if (boring != null) {
             boringWidth
@@ -673,7 +771,7 @@ internal class TextMeasurer(
         }
         val kept = Intrinsics(
             content, base.paint, paint, direction, boring, lineHeight, base.lineHeightStyle, letterSpaced, softWrap,
-            maxLines, ellipsis, align, boringWidth, maxIntrinsicWidth,
+            maxLines, ellipsis, align, boringWidth, maxIntrinsicWidth, includePad,
         )
         kept.extras = base.extras
         kept.placeholders = placeholders
@@ -786,6 +884,7 @@ internal class TextMeasurer(
             val shown = TextUtils.concat(text.subSequence(0, before), "\u2026", text.subSequence(after, text.length))
             layout = staticLayout(
                 shown, kept.paint, width.coerceAtLeast(0), kept.alignment, kept.direction, maxLines, kept.ellipsis, kept.align,
+                kept.includePad,
             )
         }
         // As Compose's: an ellipsis ends the last line the height has room for (one, if it has
@@ -830,13 +929,14 @@ internal class TextMeasurer(
         if (Build.VERSION.SDK_INT < 33 || boring == null || kept.boringWidth > width) {
             return staticLayout(
                 kept.staticText, kept.paint, width.coerceAtLeast(0), kept.alignment, kept.direction, maxLines,
-                kept.ellipsis, kept.align,
+                kept.ellipsis, kept.align, kept.includePad,
             )
         }
-        val layout = boringLayout(kept.content, kept.paint, width, kept.alignment, boring)
+        val layout = boringLayout(kept.content, kept.paint, width, kept.alignment, boring, kept.includePad)
         if (!checkBoring) return layout
         val static = staticLayout(
             kept.staticText, kept.paint, width, kept.alignment, kept.direction, maxLines, kept.ellipsis, kept.align,
+            kept.includePad,
         )
         // A difference is logged, and the StaticLayout kept (as before D330).
         return if (sameLayout(layout, static, kept.paint)) layout else static
@@ -850,7 +950,7 @@ internal class TextMeasurer(
      * height (a `StaticLayout` gives the empty line the font's metrics then, as Compose's).
      */
     private fun lastLineMetrics(layout: Layout, line: Int, kept: Intrinsics): Paint.FontMetricsInt? {
-        if (kept.lineHeight <= 0f || layout.getLineStart(line) != layout.getLineEnd(line)) return null
+        if (kept.lineHeight <= 0f || kept.lineHeightStyle.plain || layout.getLineStart(line) != layout.getLineEnd(line)) return null
         val style = kept.lineHeightStyle
         // Compose's copy: its first line's top trimmed as the original's last line's bottom,
         // except after other lines when that one is trimmed.
@@ -860,7 +960,7 @@ internal class TextMeasurer(
         space.setSpan(span, 0, space.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         val single = StaticLayout.Builder.obtain(space, 0, space.length, kept.paint, Int.MAX_VALUE)
             .setTextDirection(kept.direction)
-            .setIncludePad(false)
+            .setIncludePad(kept.includePad)
             .setUseLineSpacingFromFallbacks(true)
             .build()
         val metrics = Paint.FontMetricsInt()
@@ -912,7 +1012,7 @@ internal class TextMeasurer(
         if (Build.VERSION.SDK_INT < 33) return null
         // An empty text with a line height: its line comes from [lastLineMetrics], after a
         // `StaticLayout` (Compose's span makes no text boring).
-        if (text.isEmpty() && lineHeight > 0f) return null
+        if (lineHeight > 0f && (text.isEmpty() || lineHeightStyle.plain)) return null
         val metrics = BoringLayout.isBoring(text, paint, direction, true, null) ?: return null
         if (lineHeight > 0f) {
             lineHeightSpan(lineHeight, text.length, lineHeightStyle).chooseHeight(text, 0, text.length, 0, 0, metrics)
@@ -944,7 +1044,29 @@ internal class TextMeasurer(
      * metrics of the first line it sees.
      */
     private fun lineHeightSpan(lineHeight: Float, end: Int, style: LineHeightStyle): LineHeightSpan =
-        StyledLineHeightSpan(lineHeight, end, style)
+        if (style.plain) PlainLineHeightSpan(lineHeight) else StyledLineHeightSpan(lineHeight, end, style)
+
+    /**
+     * Compose's plain `LineHeightSpan`, which it takes for `includeFontPadding` without a line
+     * height style (D2306): every line [lineHeight] (ceiled) high, its descent scaled as much.
+     */
+    private class PlainLineHeightSpan(private val lineHeight: Float) : LineHeightSpan {
+        override fun chooseHeight(
+            text: CharSequence,
+            start: Int,
+            end: Int,
+            spanstartv: Int,
+            lineHeight: Int,
+            metrics: Paint.FontMetricsInt,
+        ) {
+            val height = metrics.descent - metrics.ascent
+            if (height <= 0) return
+            val target = ceil(this.lineHeight).toInt()
+            val ratio = target * 1.0f / height
+            metrics.descent = ceil(metrics.descent * ratio.toDouble()).toInt()
+            metrics.ascent = metrics.descent - target
+        }
+    }
 
     /**
      * Compose's `LineHeightStyleSpan` in its `Fixed` mode, the default (ui-text 1.12.1, read
@@ -1012,7 +1134,8 @@ internal class TextMeasurer(
         width: Int,
         alignment: Layout.Alignment,
         metrics: BoringLayout.Metrics,
-    ): Layout = BoringLayout(text, paint, width, alignment, 1f, 0f, metrics, false, null, width, true)
+        includePad: Boolean,
+    ): Layout = BoringLayout(text, paint, width, alignment, 1f, 0f, metrics, includePad, null, width, true)
 
     private fun staticLayout(
         text: CharSequence,
@@ -1023,11 +1146,12 @@ internal class TextMeasurer(
         maxLines: Int,
         ellipsis: TextUtils.TruncateAt?,
         align: Int,
+        includePad: Boolean,
     ): Layout {
         val builder = StaticLayout.Builder.obtain(text, 0, text.length, paint, width)
             .setAlignment(alignment)
             .setTextDirection(direction)
-            .setIncludePad(false)
+            .setIncludePad(includePad)
             .setUseLineSpacingFromFallbacks(true)
             .setBreakStrategy(LineBreaker.BREAK_STRATEGY_SIMPLE)
             .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
