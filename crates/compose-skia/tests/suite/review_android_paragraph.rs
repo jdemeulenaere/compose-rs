@@ -134,7 +134,6 @@ fn an_empty_text_with_a_background_paints_nothing() {
 }
 
 #[test]
-#[ignore = "review: SkParagraph paints a run's background behind a placeholder, where Android's TextLine draws none behind a ReplacementSpan"]
 fn a_placeholder_shows_no_background_as_android_s_replacement_span() {
     // Half an em above the baseline (0.8 em): the box is 40..80 by 12..32, the line unchanged.
     let placeholder = AnnotatedRange::new(

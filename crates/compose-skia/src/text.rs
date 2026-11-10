@@ -1059,7 +1059,17 @@ fn add_around_placeholders(
         builder.add_text(shown.range(at..covered.start));
         let mut units = shown.original[covered.clone()].encode_utf16().count();
         if covered.start == placeholder.start {
-            builder.add_placeholder(style);
+            // In the style around it without a background: Android's `TextLine` draws none behind
+            // a `ReplacementSpan` (Compose's `PlaceholderSpan`), where SkParagraph would (D2210).
+            let mut around = builder.peek_style();
+            if around.has_background() {
+                around.clear_background_color();
+                builder.push_style(&around);
+                builder.add_placeholder(style);
+                builder.pop();
+            } else {
+                builder.add_placeholder(style);
+            }
             units -= 1;
         }
         for _ in 0..units {
