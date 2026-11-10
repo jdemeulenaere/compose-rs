@@ -32,6 +32,7 @@ mod infinite_transition;
 mod interruption_aware;
 mod keyframe_animation;
 mod keyframe_spline_animation;
+mod lookahead_shared_elements;
 mod path_easing;
 mod physics;
 mod repeatable_animation;
