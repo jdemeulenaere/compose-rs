@@ -1982,9 +1982,10 @@ fn key_event(
         meta: meta & 0x10000 != 0,
     };
     let kind = if down { KeyEventType::KeyDown } else { KeyEventType::KeyUp };
-    // A typed character's text, unless it's a shortcut, as the desktop host does.
+    // A typed character's text, unless it's a shortcut (`ComposeRsView.kt` strips Ctrl, Alt and
+    // Meta from `getUnicodeChar` so the shortcut's key is known, D2112).
     let text = character
-        .filter(|c| down && !modifiers.ctrl && !modifiers.meta && !c.is_control())
+        .filter(|c| down && !modifiers.ctrl && !modifiers.alt && !modifiers.meta && !c.is_control())
         .map(|c| c.to_string());
     let event = KeyEvent { key, kind, modifiers, from_soft_keyboard: soft };
     Some((event, text))
@@ -3027,7 +3028,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "review: key_event types the base character when Alt is held on Android"]
     fn alt_shortcut_does_not_type_text() {
         let (alt_a, alt_text) = key_event(0, 'a' as i32, true, META_ALT_ON, false).unwrap();
         assert_eq!(alt_a.key, Key::Character('a'));

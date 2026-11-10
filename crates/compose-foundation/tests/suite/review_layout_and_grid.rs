@@ -332,10 +332,9 @@ fn row_mixes_align_by_line_with_other_axis_align() {
     let line = HorizontalAlignmentLine::new(|a, b| a.min(b));
     let p = PlacedProbe::new();
     let _ui = rule_sized(200, 200, move || {
-        let line = line.clone();
         Row!(move |row| {
-            let l0 = line.clone();
-            let a0: AlignmentLine = l0.clone().into();
+            let l0 = line;
+            let a0: AlignmentLine = l0.into();
             Layout!(
                 modifier = Modifier.align_by(row, l0).then(p.record(0)),
                 measure_policy = measure_policy(move |scope, _, _| {
@@ -344,8 +343,8 @@ fn row_mixes_align_by_line_with_other_axis_align() {
                 }),
                 {}
             );
-            let l1 = line.clone();
-            let a1: AlignmentLine = l1.clone().into();
+            let l1 = line;
+            let a1: AlignmentLine = l1.into();
             Layout!(
                 modifier = Modifier.align_by(row, l1).then(p.record(1)),
                 measure_policy = measure_policy(move |scope, _, _| {
@@ -368,7 +367,6 @@ fn row_mixes_align_by_line_with_other_axis_align() {
 }
 
 #[test]
-#[ignore = "review: FlowRow and FlowColumn ignore cross-axis alignments of the other axis (D1927)"]
 fn flow_row_and_flow_column_honor_other_axis_alignment_in_ltr_and_rtl() {
     let (row_scope, col_scope) = captured_scopes();
     let p = PlacedProbe::new();
@@ -544,6 +542,26 @@ fn box_match_parent_size_chaining_and_intrinsics_ignore_matching_children() {
 }
 
 #[test]
+fn box_with_constraints_scope_supports_align_and_match_parent_size() {
+    let p = PlacedProbe::new();
+    let _ui = rule_sized(200, 200, move || {
+        BoxWithConstraints!(modifier = p.record(0), move |scope: BoxWithConstraintsScope| {
+            Box!(modifier = Modifier.size((80.dp(), 50.dp())).then(p.record(1)));
+            Box!(
+                modifier =
+                    Modifier.align(scope, Alignment::BOTTOM_END).size(20.dp()).then(p.record(2))
+            );
+            Box!(modifier = Modifier.match_parent_size(scope).padding(10.dp()).then(p.record(3)));
+        });
+    });
+
+    assert_eq!(p.size(0), IntSize::new(80, 50));
+    assert_eq!((p.pos(2).x - p.pos(0).x, p.pos(2).y - p.pos(0).y), (60, 30));
+    assert_eq!(p.size(3), IntSize::new(60, 30));
+    assert_eq!((p.pos(3).x - p.pos(0).x, p.pos(3).y - p.pos(0).y), (10, 10));
+}
+
+#[test]
 fn required_size_in_modifiers_override_incoming_and_clamp_intrinsics() {
     let p = PlacedProbe::new();
     let _ui = rule_sized(300, 300, move || {
@@ -646,7 +664,6 @@ fn wait_until(ui: &mut ComposeTestRule, done: impl Fn() -> bool) {
 }
 
 #[test]
-#[ignore = "review: D1481 double-places a pinned grid item that animate_item moves out of view"]
 fn pinned_grid_item_reordered_out_of_view_with_animate_item_does_not_double_place() {
     for in_lookahead in [false, true] {
         let initial: Vec<i32> = (0..12).collect();
@@ -716,7 +733,6 @@ fn pinned_grid_item_reordered_out_of_view_with_animate_item_does_not_double_plac
 }
 
 #[test]
-#[ignore = "review: D1481 double-places a pinned grid item scrolled out of view during placement animation"]
 fn pinned_grid_item_scrolled_out_of_view_while_animating_placement_does_not_double_place() {
     for in_lookahead in [false, true] {
         let initial: Vec<i32> = (0..20).collect();
@@ -789,7 +805,6 @@ fn pinned_grid_item_scrolled_out_of_view_while_animating_placement_does_not_doub
 }
 
 #[test]
-#[ignore = "review: D2024 double-places a pinned LazyColumn item that animate_item moves before the first visible item"]
 fn pinned_lazy_list_item_reordered_before_view_with_animate_item_does_not_double_place() {
     for in_lookahead in [false, true] {
         let initial: Vec<i32> = (0..10).collect();

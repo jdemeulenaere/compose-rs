@@ -478,10 +478,10 @@ impl FlowMeasurePolicy {
                 } else {
                     None
                 };
+                let rtl_column =
+                    !self.horizontal && scope.layout_direction() == LayoutDirection::Rtl;
                 if let Some(position) = by_line {
                     // As `AlignmentLineCrossAxisAlignment`.
-                    let rtl_column =
-                        !self.horizontal && scope.layout_direction() == LayoutDirection::Rtl;
                     let cross = if position == AlignmentLine::UNSPECIFIED {
                         0
                     } else if rtl_column {
@@ -491,22 +491,20 @@ impl FlowMeasurePolicy {
                     };
                     return Placed { index, main: positions[index - start], cross };
                 }
-                let own = match scope.parent_data(measurables[index]).alignment {
-                    Some(ParentAlignment::Vertical(alignment)) if self.horizontal => alignment.bias,
-                    Some(ParentAlignment::Horizontal(alignment)) if !self.horizontal => {
-                        alignment.bias
+                // As `RowColumnMeasurePolicy::cross_bias_of` (D1927, D2111): an alignment of the
+                // other axis aligns across too; a vertical one isn't mirrored in a right-to-left
+                // column, and a horizontal one isn't mirrored in a row.
+                let (mut own, mirrored) = match scope.parent_data(measurables[index]).alignment {
+                    Some(ParentAlignment::Vertical(alignment)) => (alignment.bias, false),
+                    Some(ParentAlignment::Horizontal(alignment)) => {
+                        (alignment.bias, !self.horizontal)
                     }
-                    _ => self.bias,
+                    _ => (self.bias, !self.horizontal),
                 };
-                let cross = if self.horizontal {
-                    VerticalAlignment { bias: own }.align(item_cross, cross)
-                } else {
-                    HorizontalAlignment { bias: own }.align(
-                        item_cross,
-                        cross,
-                        scope.layout_direction(),
-                    )
-                };
+                if rtl_column && mirrored {
+                    own = -own;
+                }
+                let cross = VerticalAlignment { bias: own }.align(item_cross, cross);
                 Placed { index, main: positions[index - start], cross }
             })
             .collect();

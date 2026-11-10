@@ -3367,6 +3367,7 @@ impl slots::ItemsMeasurePolicy for LazyListLayout {
                 for away in moved {
                     if let Some(placeable) = measure(away.index, &mut sizes) {
                         // Placed once, here: the items kept apart were out of the way so far.
+                        ahead.retain(|(other, _)| *other != placeable);
                         beyond.retain(|(other, _)| *other != placeable);
                         let entry = (placeable, away.main + before);
                         if away.to_start {
