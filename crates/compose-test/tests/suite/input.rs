@@ -747,8 +747,8 @@ fn a_pointer_event_tells_the_keys_injected() {
 }
 
 // Compose: compose/ui/ui-test/src/commonMain/kotlin/androidx/compose/ui/test/InputDispatcher.kt, enqueueMouseMove (an exit, then the move)
-/// A move out of the window sends the exit, then the move: a drag pressed inside keeps
-/// hearing its moves out there.
+/// A move out of the window sends the exit, then the move: a drag pressed inside still hears
+/// its move out there, as a pressed `Exit` when it crosses the node's edge.
 #[test]
 fn a_mouse_moving_out_of_the_window_exits_then_moves() {
     let (mut ui, events) = recording_box(Offset::ZERO);
@@ -761,18 +761,16 @@ fn a_mouse_moving_out_of_the_window_exits_then_moves() {
     let recorded = events.borrow().clone();
     let moved_out = recorded
         .iter()
-        .find(|event| event.kind == PointerEventType::Move && event.position.x < 0.0)
+        .find(|event| event.kind == PointerEventType::Exit && event.position.x < 0.0)
         .unwrap_or_else(|| panic!("the drag's move out of the window: {recorded:?}"));
     assert!(moved_out.pressed);
     assert_eq!(recorded.last().unwrap().kind, PointerEventType::Release);
 }
 
 // Compose: compose/ui/ui-test/src/commonMain/kotlin/androidx/compose/ui/test/InputDispatcher.kt, enqueueMousePress and enqueueMouseMove (exitHoverOnPress)
-/// A press ends the hover: dragged out of the window and back while pressed, the cursor
-/// neither exits nor enters it (the window's exit would be an unpressed `Exit` among the
-/// moves), and the release out there leaves it not hovering, so a later exit is refused. The
-/// box's own exit comes with the release out of it, the tree's (Compose's box hears a pressed
-/// `Exit` and `Enter` as the drag crosses its edge).
+/// A press ends the hover: dragged out of the window and back while pressed, the cursor sends
+/// no unpressed window `Exit` (the tree delivers pressed `Exit` and `Enter` as the drag crosses
+/// the node's edge), and the release out there leaves it not hovering, so a later exit is refused.
 #[test]
 fn a_press_ends_the_hover() {
     let (mut ui, events) = recording_box(Offset::ZERO);
@@ -791,13 +789,12 @@ fn a_press_ends_the_hover() {
     assert_eq!(
         after,
         [
-            (PointerEventType::Move, true),
-            (PointerEventType::Move, true),
-            (PointerEventType::Move, true),
-            (PointerEventType::Exit, false),
+            (PointerEventType::Exit, true),
+            (PointerEventType::Enter, true),
+            (PointerEventType::Exit, true),
             (PointerEventType::Release, false),
         ],
-        "only pressed moves while pressed: {recorded:?}"
+        "pressed Exit/Enter only while pressed: {recorded:?}"
     );
     let message = expect_error(|| {
         ui.on_node_with_tag("box").perform_mouse_input(|mouse| mouse.exit(Offset::ZERO));

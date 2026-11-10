@@ -1843,7 +1843,7 @@ impl DragScroller {
         // Where the pointer is in the window: the deltas don't count the content's own moves (a
         // bar collapsing above it), as Compose's changes compare positions in the same layout.
         let position = context.pointer_position().unwrap_or(event.position);
-        match (event.kind, pass) {
+        match (event.kind_moving(), pass) {
             (PointerEventType::Press, PointerEventPass::Initial) => {
                 // A mouse doesn't drag a scrollable, as Compose's `CanDragCalculation` (`type !=
                 // PointerType.Mouse`, D874): its press stops nothing, and it never takes over a

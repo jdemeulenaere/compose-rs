@@ -1683,7 +1683,7 @@ impl UiTree {
             parent_data_changed |= self.refresh_custom_parent_data(node);
         }
         if changed {
-            self.remap_captures(node, &matched);
+            self.remap_captures(node, &matched, &mut old_nodes);
         }
         if inserted && !attaching {
             self.queue_lifecycle(crate::lifecycle::Lifecycle::AttachEntries(node));
@@ -1773,39 +1773,6 @@ impl UiTree {
         if parent_data_changed && let Some(parent) = self.parent_of(node) {
             self.invalidate_measure(parent);
         }
-    }
-
-    /// Points the pointer captures of `node`'s modifier nodes at their new places in its
-    /// chain, so a gesture in progress continues on a node that was kept; captures of removed
-    /// nodes are dropped.
-    pub(crate) fn remap_captures(&mut self, node: NodeId, matched: &[Option<usize>]) {
-        if self.captures.is_empty() && self.hovered.is_empty() && self.stylus_hovered.is_empty() {
-            return;
-        }
-        let value = self.node(node);
-        let version = value.chain_version;
-        let layers: SmallVec<[u16; 8]> =
-            (0..value.chain.len()).map(|index| value.layer_of(index) as u16).collect();
-        let layer_of = |index: usize| layers[index];
-        let remap = |entry: &mut crate::dispatch::HitEntry| {
-            if entry.node != node {
-                return true;
-            }
-            let Some(new_index) = matched.iter().position(|old| *old == Some(entry.index as usize))
-            else {
-                return false;
-            };
-            entry.index = new_index as u16;
-            entry.layer = layer_of(new_index);
-            entry.version = version;
-            true
-        };
-        for (_, path) in &mut self.captures {
-            path.retain_mut(remap);
-        }
-        // The hover too: what's hovered hears its exit after a chain change.
-        self.hovered.retain_mut(remap);
-        self.stylus_hovered.retain_mut(remap);
     }
 
     /// Recomputes what the chain's nodes can do, its layers and its parent data. Returns

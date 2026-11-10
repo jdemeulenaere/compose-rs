@@ -1134,8 +1134,6 @@ fn a_hover_enters_a_path_and_the_same_place_again_moves() {
 /// A mouse moving from one child of a parent to the other: the parent hears a move, the child
 /// left an exit, the child come to an enter, each branch's initial and main passes in turn.
 #[test]
-#[ignore = "hover changes are their own dispatches (the exits, the enters, then the move to the \
-            nodes hovered still), where Compose's hit path tree carries them in the move's"]
 fn a_hover_from_one_child_to_another_exits_one_and_enters_the_other() {
     let (mut host, record) = recorded(|record| {
         Row!(modifier = Modifier.then_custom(Recorder("pif1", record.clone())), {
@@ -1354,6 +1352,908 @@ fn a_cancel_tells_a_shared_parent_once_after_its_children() {
     assert_eq!(*log.borrow(), ["child1 down", "child2 down", "parent down"]);
 }
 
+/// Keyed by slot type so a chain change matches kept entries to themselves rather than by position.
+struct NamedTrace<const SLOT: usize = 0>(&'static str, Rc<RefCell<Vec<String>>>);
+
+struct NamedTraceNode(&'static str, Rc<RefCell<Vec<String>>>);
+
+impl<const SLOT: usize> ModifierNodeElement for NamedTrace<SLOT> {
+    type Node = NamedTraceNode;
+    fn create(&self) -> NamedTraceNode {
+        NamedTraceNode(self.0, self.1.clone())
+    }
+    fn update(&self, node: &mut NamedTraceNode) {
+        node.0 = self.0;
+    }
+    fn same(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl ModifierNode for NamedTraceNode {
+    fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
+        Some(self)
+    }
+}
+
+impl PointerInputModifierNode for NamedTraceNode {
+    fn takes_whole_events(&self) -> bool {
+        true
+    }
+    fn on_pointer_events(
+        &mut self,
+        event: &PointerEvents,
+        pass: PointerEventPass,
+        _: IntSize,
+        _: &mut EventContext<'_>,
+    ) {
+        if pass == PointerEventPass::Main {
+            let mut pointers = ids(event);
+            pointers.sort_unstable();
+            self.1.borrow_mut().push(format!("{} {:?} {:?}", self.0, event.kind, pointers));
+        }
+    }
+    fn on_cancel_pointer_input(&mut self) {
+        self.1.borrow_mut().push(format!("{} cancel", self.0));
+    }
+}
+
+fn trace_mod(name: &'static str, log: &Rc<RefCell<Vec<String>>>) -> Modifier {
+    Modifier.then_custom(NamedTrace::<0>(name, log.clone()))
+}
+
+fn slot_trace_mod<const SLOT: usize>(
+    name: &'static str,
+    log: &Rc<RefCell<Vec<String>>>,
+) -> Modifier {
+    Modifier.then_custom(NamedTrace::<SLOT>(name, log.clone()))
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/pointer/HitPathTrackerTest.kt, addPointerInputFilters_allInDetachedState_notAdded
+/// Detached branches aren't hit, added to any path, or told of a cancel.
+#[test]
+fn detached_branches_are_neither_added_nor_cancelled() {
+    let log: Rc<RefCell<Vec<String>>> = Rc::default();
+    let attached = mutable_state_of(true);
+    let handle = attached.handle();
+    let seen = log.clone();
+    let mut host = host(move || {
+        let log = seen.clone();
+        if handle.get() {
+            let inner = log.clone();
+            Row!(modifier = trace_mod("root", &log), {
+                Leaf(
+                    Modifier
+                        .size(30.dp())
+                        .then(trace_mod("mid1", &inner))
+                        .then(trace_mod("leaf1", &inner)),
+                );
+                Leaf(
+                    Modifier
+                        .size(30.dp())
+                        .then(trace_mod("mid2", &inner))
+                        .then(trace_mod("leaf2", &inner)),
+                );
+                Leaf(
+                    Modifier
+                        .size(30.dp())
+                        .then(trace_mod("mid3", &inner))
+                        .then(trace_mod("leaf3", &inner)),
+                );
+            });
+        }
+    });
+    attached.set(false);
+    host.frame();
+    log.borrow_mut().clear();
+    host.send_pointers(&[
+        finger_down(3, 10.0, 10.0),
+        finger_down(5, 40.0, 10.0),
+        finger_down(7, 70.0, 10.0),
+    ]);
+    host.with_tree(|tree| tree.cancel_pointers());
+    assert!(log.borrow().is_empty(), "{:?}", log.borrow());
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/pointer/HitPathTrackerTest.kt, addHitPath_emptyHitResult_resultIsCorrect, addHitPath_existingNonMatchingTree_resultIsCorrect, addHitPath_completeMatchingTree_resultIsCorrect, addHitPath_partiallyMatchingTree_resultIsCorrect
+/// Adding hit paths into an empty, non-matching, completely matching, or partially matching hit
+/// tree merges shared prefixes and keeps diverging tails distinct.
+#[test]
+fn adding_hit_paths_builds_independent_shared_and_branching_trees() {
+    // Empty -> one 3-node path; then a second pointer on the complete matching path.
+    let log: Rc<RefCell<Vec<String>>> = Rc::default();
+    let seen = log.clone();
+    let mut h = host(move || {
+        Leaf(
+            Modifier
+                .size(50.dp())
+                .then(trace_mod("pif1", &seen))
+                .then(trace_mod("pif2", &seen))
+                .then(trace_mod("pif3", &seen)),
+        );
+    });
+    h.send_pointer(finger_down(1, 10.0, 10.0));
+    assert_eq!(*log.borrow(), ["pif3 Press [1]", "pif2 Press [1]", "pif1 Press [1]"]);
+    log.borrow_mut().clear();
+    h.send_pointer(finger_down(2, 20.0, 10.0));
+    assert_eq!(*log.borrow(), ["pif3 Press [1, 2]", "pif2 Press [1, 2]", "pif1 Press [1, 2]"]);
+
+    // Non-matching tree: two independent 3-node paths.
+    let log: Rc<RefCell<Vec<String>>> = Rc::default();
+    let seen = log.clone();
+    let mut h = host(move || {
+        let seen = seen.clone();
+        Row!({
+            Leaf(
+                Modifier
+                    .size(50.dp())
+                    .then(trace_mod("pif1", &seen))
+                    .then(trace_mod("pif2", &seen))
+                    .then(trace_mod("pif3", &seen)),
+            );
+            Leaf(
+                Modifier
+                    .size(50.dp())
+                    .then(trace_mod("pif4", &seen))
+                    .then(trace_mod("pif5", &seen))
+                    .then(trace_mod("pif6", &seen)),
+            );
+        });
+    });
+    h.send_pointer(finger_down(1, 10.0, 10.0));
+    log.borrow_mut().clear();
+    h.send_pointer(finger_down(2, 60.0, 10.0));
+    assert_eq!(
+        *log.borrow(),
+        [
+            "pif3 Press [1]",
+            "pif2 Press [1]",
+            "pif1 Press [1]",
+            "pif6 Press [2]",
+            "pif5 Press [2]",
+            "pif4 Press [2]",
+        ]
+    );
+
+    // Partially matching tree: shared `pif1`, then `pif2 -> pif3` vs `pif4 -> pif5`.
+    let log: Rc<RefCell<Vec<String>>> = Rc::default();
+    let seen = log.clone();
+    let mut h = host(move || {
+        let inner = seen.clone();
+        Row!(modifier = trace_mod("pif1", &seen), {
+            Leaf(
+                Modifier
+                    .size(50.dp())
+                    .then(trace_mod("pif2", &inner))
+                    .then(trace_mod("pif3", &inner)),
+            );
+            Leaf(
+                Modifier
+                    .size(50.dp())
+                    .then(trace_mod("pif4", &inner))
+                    .then(trace_mod("pif5", &inner)),
+            );
+        });
+    });
+    h.send_pointer(finger_down(1, 10.0, 10.0));
+    log.borrow_mut().clear();
+    h.send_pointer(finger_down(2, 60.0, 10.0));
+    assert_eq!(
+        *log.borrow(),
+        [
+            "pif3 Press [1]",
+            "pif2 Press [1]",
+            "pif5 Press [2]",
+            "pif4 Press [2]",
+            "pif1 Press [1, 2]",
+        ]
+    );
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/pointer/HitPathTrackerTest.kt, addHitPath_dynamicNodeAddedBelowPartiallyMatchingTreeWithOnePointerId_correctResult, addHitPath_dynamicNodeAddedBelowPartiallyMatchingTreeWithTwoPointerIds_correctResult
+/// A node dynamically added at the bottom of an existing hover path merges into the prefix
+/// without duplicating any node on that path or disturbing a second pointer's path.
+#[test]
+fn a_node_added_below_a_tracked_hover_path_enters_without_duplicating_the_prefix() {
+    for two_pointers in [false, true] {
+        let log: Rc<RefCell<Vec<String>>> = Rc::default();
+        let extra = mutable_state_of(false);
+        let handle = extra.handle();
+        let seen = log.clone();
+        let mut host = host(move || {
+            let log = seen.clone();
+            let add_new = handle.get();
+            Row!({
+                if two_pointers {
+                    Leaf(
+                        Modifier
+                            .size(50.dp())
+                            .then(trace_mod("pif1", &log))
+                            .then(trace_mod("pif2", &log))
+                            .then(trace_mod("pif3", &log))
+                            .then(trace_mod("pif4", &log)),
+                    );
+                }
+                let inner = log.clone();
+                Stack!(
+                    modifier = Modifier
+                        .size(50.dp())
+                        .then(trace_mod("pif5", &log))
+                        .then(trace_mod("pif6", &log))
+                        .then(trace_mod("pif7", &log))
+                        .then(trace_mod("pif8", &log)),
+                    {
+                        if add_new {
+                            Leaf(
+                                Modifier
+                                    .offset(25.dp(), 0.dp())
+                                    .size(DpSize::new(25.dp(), 50.dp()))
+                                    .then(trace_mod("new", &inner)),
+                            );
+                        }
+                    }
+                );
+            });
+        });
+        let hover_x = if two_pointers { 50.0 } else { 0.0 };
+        if two_pointers {
+            host.send_pointer(finger_down(1, 10.0, 10.0));
+        }
+        host.send_pointer(hover(hover_x + 5.0, 10.0));
+        log.borrow_mut().clear();
+        extra.set(true);
+        host.frame();
+        assert!(log.borrow().is_empty(), "{:?}", log.borrow());
+
+        // Moving onto `new` merges `[pif5..8, new]` onto `[pif5..8]` in `hover_move` (`new` enters,
+        // `pif5..8` move once each, and resting pointer `1` moves on `pif1..4` after pointer `0`).
+        host.send_pointer(hover(hover_x + 30.0, 10.0));
+        let mut expected = vec![
+            "new Enter [0]",
+            "pif8 Move [0]",
+            "pif7 Move [0]",
+            "pif6 Move [0]",
+            "pif5 Move [0]",
+        ];
+        if two_pointers {
+            expected.extend(["pif4 Move [1]", "pif3 Move [1]", "pif2 Move [1]", "pif1 Move [1]"]);
+        }
+        assert_eq!(*log.borrow(), expected, "two_pointers={two_pointers}");
+    }
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/pointer/HitPathTrackerTest.kt, removeDetachedPointerInputFilters_complexNothingDetached_nothingRemovedNoCancelsCalled
+/// Re-running a frame over five active paths of varying depths and shared parents when nothing
+/// detaches cancels nothing and leaves every path intact.
+#[test]
+fn a_frame_detaching_nothing_cancels_nothing_across_five_paths() {
+    let log: Rc<RefCell<Vec<String>>> = Rc::default();
+    let tick = mutable_state_of(0);
+    let handle = tick.handle();
+    let seen = log.clone();
+    let mut host = host(move || {
+        let _ = handle.get();
+        let log = seen.clone();
+        Row!({
+            Leaf(Modifier.size(20.dp()).then(trace_mod("pif1", &log)));
+            Leaf(
+                Modifier.size(20.dp()).then(trace_mod("pif3", &log)).then(trace_mod("pif2", &log)),
+            );
+            Leaf(
+                Modifier
+                    .size(20.dp())
+                    .then(trace_mod("pif6", &log))
+                    .then(trace_mod("pif5", &log))
+                    .then(trace_mod("pif4", &log)),
+            );
+            let inner = log.clone();
+            Row!(modifier = trace_mod("pif9", &log), {
+                Leaf(Modifier.size(20.dp()).then(trace_mod("pif7", &inner)));
+                Leaf(Modifier.size(20.dp()).then(trace_mod("pif8", &inner)));
+            });
+        });
+    });
+    host.send_pointers(&[
+        finger_down(1, 5.0, 5.0),
+        finger_down(2, 25.0, 5.0),
+        finger_down(3, 45.0, 5.0),
+        finger_down(4, 65.0, 5.0),
+        finger_down(5, 85.0, 5.0),
+    ]);
+    log.borrow_mut().clear();
+    tick.set(1);
+    host.frame();
+    assert!(log.borrow().is_empty(), "{:?}", log.borrow());
+    host.send_pointers(&[
+        finger(1, 6.0, 5.0),
+        finger(2, 26.0, 5.0),
+        finger(3, 46.0, 5.0),
+        finger(4, 66.0, 5.0),
+        finger(5, 86.0, 5.0),
+    ]);
+    assert_eq!(
+        *log.borrow(),
+        [
+            "pif1 Move [1]",
+            "pif2 Move [2]",
+            "pif3 Move [2]",
+            "pif4 Move [3]",
+            "pif5 Move [3]",
+            "pif6 Move [3]",
+            "pif7 Move [4]",
+            "pif8 Move [5]",
+            "pif9 Move [4, 5]",
+        ]
+    );
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/pointer/HitPathTrackerTest.kt, removeDetachedPointerInputFilters_1PathRootDetached_allRemovedAndCorrectCancels, removeDetachedPointerInputFilters_1PathMiddleDetached_removesAndCancelsCorrect, removeDetachedPointerInputFilters_1PathLeafDetached_removesAndCancelsCorrect
+/// On a single 3-node path, detaching the root, the middle or the leaf cancels the detached node
+/// and what was below it innermost first, keeping any prefix above it alive; tested both for
+/// nested layout nodes and for modifier entries on one layout node.
+#[test]
+fn removing_a_root_middle_or_leaf_on_one_path_cancels_it_and_below_and_keeps_above() {
+    let cases: &[(usize, &[&str], &[&str])] = &[
+        (0, &["leaf cancel", "middle cancel", "root cancel"], &[]),
+        (1, &["leaf cancel", "middle cancel"], &["root Move [1]"]),
+        (2, &["leaf cancel"], &["middle Move [1]", "root Move [1]"]),
+    ];
+    for &(cut_at, expected_cancels, expected_moves) in cases {
+        for by_chain in [false, true] {
+            let log: Rc<RefCell<Vec<String>>> = Rc::default();
+            let keep_from = mutable_state_of(3usize);
+            let handle = keep_from.handle();
+            let seen = log.clone();
+            let mut host = host(move || {
+                let depth = handle.get();
+                let log = seen.clone();
+                if by_chain {
+                    // Detaching only `cut_at` leaves any modifier below it attached in the chain,
+                    // yet still cuts it off the gesture path and cancels it innermost first.
+                    let r = if depth != 0 { slot_trace_mod::<0>("root", &log) } else { Modifier };
+                    let m = if depth != 1 { slot_trace_mod::<1>("middle", &log) } else { Modifier };
+                    let l = if depth != 2 { slot_trace_mod::<2>("leaf", &log) } else { Modifier };
+                    Leaf(Modifier.size(50.dp()).then(r).then(m).then(l));
+                } else if depth > 0 {
+                    let mid_log = log.clone();
+                    Stack!(modifier = Modifier.size(50.dp()).then(trace_mod("root", &log)), {
+                        if depth > 1 {
+                            let leaf_log = mid_log.clone();
+                            Stack!(modifier = trace_mod("middle", &mid_log), {
+                                if depth > 2 {
+                                    Leaf(Modifier.size(50.dp()).then(trace_mod("leaf", &leaf_log)));
+                                }
+                            });
+                        }
+                    });
+                }
+            });
+            host.send_pointer(finger_down(1, 10.0, 10.0));
+            log.borrow_mut().clear();
+            keep_from.set(cut_at);
+            host.frame();
+            assert_eq!(*log.borrow(), expected_cancels, "cut={cut_at}, by_chain={by_chain}");
+            log.borrow_mut().clear();
+            host.send_pointer(finger(1, 12.0, 10.0));
+            assert_eq!(*log.borrow(), expected_moves, "cut={cut_at}, by_chain={by_chain}");
+        }
+    }
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/pointer/HitPathTrackerTest.kt, removeDetachedPointerInputFilters_3Roots1Detached_removesAndCancelsCorrect, removeDetachedPointerInputFilters_3Roots1MiddleDetached_removesAndCancelsCorrect, removeDetachedPointerInputFilters_3Roots1LeafDetached_removesAndCancelsCorrect, removeDetachedPointerInputFilters_3Roots2Detached_removesAndCancelsCorrect, removeDetachedPointerInputFilters_3Roots2MiddlesDetached_removesAndCancelsCorrect, removeDetachedPointerInputFilters_3Roots2LeafsDetached_removesAndCancelsCorrect, removeDetachedPointerInputFilters_3Roots3Detached_allRemovedAndCancelsCorrect, removeDetachedPointerInputFilters_3Roots3MiddlesDetached_removesAndCancelsCorrect, removeDetachedPointerInputFilters_3Roots3LeafsDetached_removesAndCancelsCorrect, removeDetachedPointerInputFilters_3RootsStaggeredDetached_removesAndCancelsCorrect
+/// Three independent 3-node branches: detaching 1, 2 or 3 roots, middles or leaves (or a
+/// staggered cut across the three) cancels each removed suffix innermost first and keeps the
+/// surviving prefixes receiving their pointers' moves.
+#[test]
+fn removing_detached_nodes_across_three_independent_roots_cancels_each_and_keeps_the_prefixes() {
+    // Each case gives the surviving depth (0..=3) of branches 1, 2 and 3.
+    let depths: [(usize, usize, usize); 10] = [
+        (3, 3, 0), // 3Roots1Detached (branch 3)
+        (1, 3, 3), // 3Roots1MiddleDetached (branch 1)
+        (3, 2, 3), // 3Roots1LeafDetached (branch 2)
+        (0, 3, 0), // 3Roots2Detached (branches 1, 3)
+        (1, 1, 3), // 3Roots2MiddlesDetached (branches 1, 2)
+        (3, 2, 2), // 3Roots2LeafsDetached (branches 2, 3)
+        (0, 0, 0), // 3Roots3Detached
+        (1, 1, 1), // 3Roots3MiddlesDetached
+        (2, 2, 2), // 3Roots3LeafsDetached
+        (0, 1, 2), // 3RootsStaggeredDetached
+    ];
+    let names = [
+        ["root1", "middle1", "leaf1"],
+        ["root2", "middle2", "leaf2"],
+        ["root3", "middle3", "leaf3"],
+    ];
+    let pids = [3u64, 5, 7];
+    for (d1, d2, d3) in depths {
+        let log: Rc<RefCell<Vec<String>>> = Rc::default();
+        let kept = mutable_state_of([3usize, 3, 3]);
+        let handle = kept.handle();
+        let seen = log.clone();
+        let mut host = host(move || {
+            let cur = handle.get();
+            let log = seen.clone();
+            Row!({
+                for b in 0..3 {
+                    let d = cur[b];
+                    let r = if d > 0 { trace_mod(names[b][0], &log) } else { Modifier };
+                    let m = if d > 1 { trace_mod(names[b][1], &log) } else { Modifier };
+                    let l = if d > 2 { trace_mod(names[b][2], &log) } else { Modifier };
+                    Leaf(Modifier.size(30.dp()).then(r).then(m).then(l));
+                }
+            });
+        });
+        host.send_pointers(&[
+            finger_down(3, 10.0, 10.0),
+            finger_down(5, 40.0, 10.0),
+            finger_down(7, 70.0, 10.0),
+        ]);
+        log.borrow_mut().clear();
+        let target = [d1, d2, d3];
+        kept.set(target);
+        host.frame();
+
+        let mut expected_cancels = Vec::new();
+        let mut expected_moves = Vec::new();
+        for b in 0..3 {
+            for level in (target[b]..3).rev() {
+                expected_cancels.push(format!("{} cancel", names[b][level]));
+            }
+            for level in (0..target[b]).rev() {
+                expected_moves.push(format!("{} Move [{}]", names[b][level], pids[b]));
+            }
+        }
+        assert_eq!(*log.borrow(), expected_cancels, "target={target:?}");
+        log.borrow_mut().clear();
+        host.send_pointers(&[finger(3, 12.0, 10.0), finger(5, 42.0, 10.0), finger(7, 72.0, 10.0)]);
+        assert_eq!(*log.borrow(), expected_moves, "target={target:?}");
+    }
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/pointer/HitPathTrackerTest.kt, removeDetachedPointerInputFilters_rootWith3MiddlesDetached_allRemovedAndCorrectCancels, removeDetachedPointerInputFilters_rootWith3Middles1Detached_removesAndCancelsCorrect, removeDetachedPointerInputFilters_rootWith3Middles2Detached_removesAndCancelsCorrect, removeDetachedPointerInputFilters_rootWith3MiddlesAllDetached_allMiddlesRemoved
+/// One shared root above three `middle -> leaf` branches: detaching 1, 2 or all 3 middles (or the
+/// root itself) cancels the removed subtrees innermost first and keeps the remaining branches and
+/// root alive.
+#[test]
+fn removing_middles_or_the_shared_root_of_three_branches_cancels_in_order_and_keeps_the_rest() {
+    // (keep_root, [keep_b1, keep_b2, keep_b3])
+    let cases = [
+        (false, [false, false, false]), // rootWith3MiddlesDetached
+        (true, [true, true, false]),    // rootWith3Middles1Detached
+        (true, [false, false, true]),   // rootWith3Middles2Detached
+        (true, [false, false, false]),  // rootWith3MiddlesAllDetached
+    ];
+    let branches = [("middle1", "leaf1", 3u64), ("middle2", "leaf2", 5), ("middle3", "leaf3", 7)];
+    for (keep_root, keep_branches) in cases {
+        let log: Rc<RefCell<Vec<String>>> = Rc::default();
+        let state = mutable_state_of((true, [true, true, true]));
+        let handle = state.handle();
+        let seen = log.clone();
+        let mut host = host(move || {
+            let (root_on, br_on) = handle.get();
+            let log = seen.clone();
+            if root_on {
+                let inner = log.clone();
+                Row!(
+                    modifier =
+                        Modifier.size(DpSize::new(90.dp(), 30.dp())).then(trace_mod("root", &log)),
+                    {
+                        for b in 0..3 {
+                            let m = if br_on[b] {
+                                trace_mod(branches[b].0, &inner)
+                                    .then(trace_mod(branches[b].1, &inner))
+                            } else {
+                                Modifier
+                            };
+                            Leaf(Modifier.size(30.dp()).then(m));
+                        }
+                    }
+                );
+            }
+        });
+        host.send_pointers(&[
+            finger_down(3, 10.0, 10.0),
+            finger_down(5, 40.0, 10.0),
+            finger_down(7, 70.0, 10.0),
+        ]);
+        log.borrow_mut().clear();
+        state.set((keep_root, keep_branches));
+        host.frame();
+
+        let mut expected_cancels = Vec::new();
+        for b in 0..3 {
+            if !keep_root || !keep_branches[b] {
+                expected_cancels.push(format!("{} cancel", branches[b].1));
+                expected_cancels.push(format!("{} cancel", branches[b].0));
+            }
+        }
+        if !keep_root {
+            expected_cancels.push("root cancel".into());
+        }
+        assert_eq!(*log.borrow(), expected_cancels, "case=({keep_root}, {keep_branches:?})");
+
+        log.borrow_mut().clear();
+        host.send_pointers(&[finger(3, 12.0, 10.0), finger(5, 42.0, 10.0), finger(7, 72.0, 10.0)]);
+        let mut expected_moves = Vec::new();
+        if keep_root {
+            for b in 0..3 {
+                if keep_branches[b] {
+                    expected_moves.push(format!("{} Move [{}]", branches[b].1, branches[b].2));
+                    expected_moves.push(format!("{} Move [{}]", branches[b].0, branches[b].2));
+                }
+            }
+            expected_moves.push("root Move [3, 5, 7]".into());
+        }
+        assert_eq!(*log.borrow(), expected_moves, "case=({keep_root}, {keep_branches:?})");
+    }
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/pointer/HitPathTrackerTest.kt, removeDetachedPointerInputFilters_middleWith3Leafs1Detached_correctLeafRemoved, removeDetachedPointerInputFilters_middleWith3Leafs2Detached_correctLeafsRemoved, removeDetachedPointerInputFilters_middleWith3LeafsAllDetached_allLeafsRemoved
+/// Shared `root -> middle` above three leaves: detaching 1, 2 or all 3 leaves cancels only the
+/// detached leaves and keeps `root -> middle` (and any staying leaf) receiving all three pointers.
+#[test]
+fn removing_leaves_under_a_shared_middle_cancels_those_leaves_and_keeps_the_shared_stem() {
+    let cases = [
+        [true, false, true],   // middleWith3Leafs1Detached (leaf2)
+        [false, true, false],  // middleWith3Leafs2Detached (leaf1, leaf3)
+        [false, false, false], // middleWith3LeafsAllDetached
+    ];
+    let leaves = [("leaf1", 3u64), ("leaf2", 5), ("leaf3", 7)];
+    for keep_leaves in cases {
+        let log: Rc<RefCell<Vec<String>>> = Rc::default();
+        let state = mutable_state_of([true, true, true]);
+        let handle = state.handle();
+        let seen = log.clone();
+        let mut host = host(move || {
+            let on = handle.get();
+            let log = seen.clone();
+            let inner = log.clone();
+            Row!(
+                modifier = Modifier
+                    .size(DpSize::new(90.dp(), 30.dp()))
+                    .then(trace_mod("root", &log))
+                    .then(trace_mod("middle", &log)),
+                {
+                    for b in 0..3 {
+                        let l = if on[b] { trace_mod(leaves[b].0, &inner) } else { Modifier };
+                        Leaf(Modifier.size(30.dp()).then(l));
+                    }
+                }
+            );
+        });
+        host.send_pointers(&[
+            finger_down(3, 10.0, 10.0),
+            finger_down(5, 40.0, 10.0),
+            finger_down(7, 70.0, 10.0),
+        ]);
+        log.borrow_mut().clear();
+        state.set(keep_leaves);
+        host.frame();
+
+        let expected_cancels: Vec<String> = (0..3)
+            .filter(|&b| !keep_leaves[b])
+            .map(|b| format!("{} cancel", leaves[b].0))
+            .collect();
+        assert_eq!(*log.borrow(), expected_cancels, "keep={keep_leaves:?}");
+
+        log.borrow_mut().clear();
+        host.send_pointers(&[finger(3, 12.0, 10.0), finger(5, 42.0, 10.0), finger(7, 72.0, 10.0)]);
+        let mut expected_moves: Vec<String> = (0..3)
+            .filter(|&b| keep_leaves[b])
+            .map(|b| format!("{} Move [{}]", leaves[b].0, leaves[b].1))
+            .collect();
+        expected_moves.push("middle Move [3, 5, 7]".into());
+        expected_moves.push("root Move [3, 5, 7]".into());
+        assert_eq!(*log.borrow(), expected_moves, "keep={keep_leaves:?}");
+    }
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/pointer/HitPathTrackerTest.kt, removeHitPath_onePathPointerIdRemoved_hitTestResultIsEmpty, removeHitPath_onePathOtherPointerIdRemoved_hitTestResultIsNotChanged, removeHitPath_2IndependentPaths1PointerIdRemoved_resultContainsRemainingPath, removeHitPath_2PathsShareNodes1PointerIdRemoved_resultContainsRemainingPath, removeHitPath_2PathsShare2NodesLongPathPointerIdRemoved_resultJustHasShortPath, removeHitPath_2PathsShare2NodesShortPathPointerIdRemoved_resultJustHasLongPath, removeHitPath_2PathsShare1NodeLongPathPointerIdRemoved_resultJustHasShortPath, removeHitPath_2PathsShare1NodeShortPathPointerIdRemoved_resultJustHasLongPath
+/// Releasing a pointer drops its unshared nodes from the hit paths while leaving every other
+/// pointer's path — independent, identical, longer or shorter — intact.
+#[test]
+fn releasing_a_pointer_prunes_its_unshared_nodes_and_keeps_other_pointers_paths() {
+    // 1 & 2: one path: removing an unrelated pointer keeps it; removing its own clears it.
+    let log: Rc<RefCell<Vec<String>>> = Rc::default();
+    let seen = log.clone();
+    let mut h = host(move || {
+        let seen = seen.clone();
+        Row!({
+            Leaf(
+                Modifier
+                    .size(50.dp())
+                    .then(trace_mod("root", &seen))
+                    .then(trace_mod("middle", &seen))
+                    .then(trace_mod("leaf", &seen)),
+            );
+        });
+    });
+    h.send_pointer(finger_down(3, 10.0, 10.0));
+    h.send_pointer(finger_down(99, 80.0, 10.0));
+    h.send_pointer(finger_up(99, 80.0, 10.0));
+    log.borrow_mut().clear();
+    h.send_pointer(finger(3, 12.0, 10.0));
+    assert_eq!(*log.borrow(), ["leaf Move [3]", "middle Move [3]", "root Move [3]"]);
+    h.send_pointer(finger_up(3, 12.0, 10.0));
+    log.borrow_mut().clear();
+    h.with_tree(|tree| tree.cancel_pointers());
+    assert!(log.borrow().is_empty());
+
+    // 3: two independent paths, pointer 5 released -> pointer 3's path remains.
+    let log: Rc<RefCell<Vec<String>>> = Rc::default();
+    let seen = log.clone();
+    let mut h = host(move || {
+        let seen = seen.clone();
+        Row!({
+            Leaf(
+                Modifier
+                    .size(50.dp())
+                    .then(trace_mod("r1", &seen))
+                    .then(trace_mod("m1", &seen))
+                    .then(trace_mod("l1", &seen)),
+            );
+            Leaf(
+                Modifier
+                    .size(50.dp())
+                    .then(trace_mod("r2", &seen))
+                    .then(trace_mod("m2", &seen))
+                    .then(trace_mod("l2", &seen)),
+            );
+        });
+    });
+    h.send_pointers(&[finger_down(3, 10.0, 10.0), finger_down(5, 60.0, 10.0)]);
+    h.send_pointers(&[finger(3, 10.0, 10.0), finger_up(5, 60.0, 10.0)]);
+    log.borrow_mut().clear();
+    h.send_pointer(finger(3, 12.0, 10.0));
+    assert_eq!(*log.borrow(), ["l1 Move [3]", "m1 Move [3]", "r1 Move [3]"]);
+
+    // 4: two pointers sharing all 3 nodes (`root -> middle -> leaf`), pointer 3 released.
+    let log: Rc<RefCell<Vec<String>>> = Rc::default();
+    let seen = log.clone();
+    let mut h = host(move || {
+        Leaf(
+            Modifier
+                .size(50.dp())
+                .then(trace_mod("root", &seen))
+                .then(trace_mod("middle", &seen))
+                .then(trace_mod("leaf", &seen)),
+        );
+    });
+    h.send_pointers(&[finger_down(3, 10.0, 10.0), finger_down(5, 20.0, 10.0)]);
+    h.send_pointers(&[finger_up(3, 10.0, 10.0), finger(5, 20.0, 10.0)]);
+    log.borrow_mut().clear();
+    h.send_pointer(finger(5, 22.0, 10.0));
+    assert_eq!(*log.borrow(), ["leaf Move [5]", "middle Move [5]", "root Move [5]"]);
+
+    // 5 & 6: 2 shared nodes (`root -> middle`), pointer 3 also on `leaf` (x < 30), pointer 5 on
+    // `middle` outside `leaf` (30 <= x < 60).
+    for release_long in [true, false] {
+        let log: Rc<RefCell<Vec<String>>> = Rc::default();
+        let seen = log.clone();
+        let mut h = host(move || {
+            let inner = seen.clone();
+            Stack!(
+                modifier = Modifier
+                    .size(DpSize::new(60.dp(), 30.dp()))
+                    .then(trace_mod("root", &seen))
+                    .then(trace_mod("middle", &seen)),
+                {
+                    Leaf(Modifier.size(30.dp()).then(trace_mod("leaf", &inner)));
+                }
+            );
+        });
+        h.send_pointers(&[finger_down(3, 10.0, 10.0), finger_down(5, 45.0, 10.0)]);
+        if release_long {
+            h.send_pointers(&[finger_up(3, 10.0, 10.0), finger(5, 45.0, 10.0)]);
+            log.borrow_mut().clear();
+            h.send_pointer(finger(5, 47.0, 10.0));
+            assert_eq!(*log.borrow(), ["middle Move [5]", "root Move [5]"]);
+        } else {
+            h.send_pointers(&[finger(3, 10.0, 10.0), finger_up(5, 45.0, 10.0)]);
+            log.borrow_mut().clear();
+            h.send_pointer(finger(3, 12.0, 10.0));
+            assert_eq!(*log.borrow(), ["leaf Move [3]", "middle Move [3]", "root Move [3]"]);
+        }
+    }
+
+    // 7 & 8: 1 shared node (`root`), pointer 3 on `root -> middle -> leaf` (x < 30), pointer 5 on
+    // `root` alone (30 <= x < 60).
+    for release_long in [true, false] {
+        let log: Rc<RefCell<Vec<String>>> = Rc::default();
+        let seen = log.clone();
+        let mut h = host(move || {
+            let inner = seen.clone();
+            Stack!(
+                modifier =
+                    Modifier.size(DpSize::new(60.dp(), 30.dp())).then(trace_mod("root", &seen)),
+                {
+                    Leaf(
+                        Modifier
+                            .size(30.dp())
+                            .then(trace_mod("middle", &inner))
+                            .then(trace_mod("leaf", &inner)),
+                    );
+                }
+            );
+        });
+        h.send_pointers(&[finger_down(3, 10.0, 10.0), finger_down(5, 45.0, 10.0)]);
+        if release_long {
+            h.send_pointers(&[finger_up(3, 10.0, 10.0), finger(5, 45.0, 10.0)]);
+            log.borrow_mut().clear();
+            h.send_pointer(finger(5, 47.0, 10.0));
+            assert_eq!(*log.borrow(), ["root Move [5]"]);
+        } else {
+            h.send_pointers(&[finger(3, 10.0, 10.0), finger_up(5, 45.0, 10.0)]);
+            log.borrow_mut().clear();
+            h.send_pointer(finger(3, 12.0, 10.0));
+            assert_eq!(*log.borrow(), ["leaf Move [3]", "middle Move [3]", "root Move [3]"]);
+        }
+    }
+}
+
+/// A child node left unplaced mid-gesture (still attached in the tree) is skipped by captured
+/// pointer delivery while its placed parent keeps hearing the gesture.
+#[test]
+fn an_unplaced_node_on_a_captured_path_is_skipped_without_disturbing_its_parent() {
+    #[derive(PartialEq)]
+    struct PlaceIf(bool);
+    impl MeasurePolicy for PlaceIf {
+        fn measure(
+            &self,
+            scope: &mut MeasureScope<'_>,
+            measurables: &[Measurable],
+            constraints: Constraints,
+        ) -> MeasureResult {
+            let placeable = scope.measure(measurables[0], constraints);
+            if self.0 {
+                scope.place(&placeable, 0, 0);
+            }
+            scope.layout(placeable.width, placeable.height)
+        }
+        fn same(&self, other: &dyn std::any::Any) -> bool {
+            other.downcast_ref::<Self>() == Some(self)
+        }
+    }
+
+    let log: Rc<RefCell<Vec<String>>> = Rc::default();
+    let place = mutable_state_of(true);
+    let handle = place.handle();
+    let seen = log.clone();
+    let mut host = host(move || {
+        let on = handle.get();
+        let inner = seen.clone();
+        emit_layout_node(
+            Modifier.size(50.dp()).then(trace_mod("parent", &seen)),
+            Rc::new(PlaceIf(on)),
+            || {
+                Leaf(Modifier.size(50.dp()).then(trace_mod("child", &inner)));
+            },
+        );
+    });
+    host.send_pointer(PointerEvent::press(Offset::new(10.0, 10.0)));
+    log.borrow_mut().clear();
+    place.set(false);
+    host.frame();
+    log.borrow_mut().clear();
+    host.send_pointer(PointerEvent::moved(Offset::new(12.0, 10.0), true));
+    assert_eq!(*log.borrow(), ["parent Move [0]"]);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/pointer/HitPathTrackerTest.kt, trackpadPan_preservesPanEvents_whenNodeExitsBounds, trackpadPan_hoverTransitionToHoverAndMove
+/// A hovered node scrolling out of bounds during a trackpad pan hears `Exit` and still hears the
+/// pan to its end; once the pan ends, hover transitions cleanly to the new node under the cursor.
+#[test]
+fn a_trackpad_pan_exits_a_scrolled_node_keeps_its_pan_and_transitions_back_to_hover() {
+    let record = Record::default();
+    let scrolled = mutable_state_of(false);
+    let handle = scrolled.handle();
+    let seen = record.clone();
+    let mut host = host(move || {
+        let away = handle.get();
+        let seen = seen.clone();
+        let x = if away { 60.dp() } else { 0.dp() };
+        Stack!(modifier = Modifier.size(100.dp()), {
+            Leaf(Modifier.size(50.dp()).then_custom(Recorder("child2", seen.clone())));
+            Leaf(Modifier.offset(x, x).size(50.dp()).then_custom(Recorder("child1", seen.clone())));
+        });
+    });
+    let cursor = Offset::new(10.0, 10.0);
+    host.send_pointer(hover(10.0, 10.0));
+    assert_eq!(kinds(&record), ["child1 Initial Enter", "child1 Main Enter", "child1 Final Enter"]);
+    record.borrow_mut().clear();
+
+    host.send_pointer(PointerEvent::pan(PointerEventType::PanStart, cursor, Offset::ZERO));
+    record.borrow_mut().clear();
+    scrolled.set(true);
+    host.frame();
+    host.send_pointer(PointerEvent::pan(PointerEventType::PanMove, cursor, Offset::new(0.0, 10.0)));
+    assert_eq!(
+        kinds(&record),
+        [
+            "child1 Initial Exit",
+            "child1 Main Exit",
+            "child1 Final Exit",
+            "child1 Initial PanMove",
+            "child1 Main PanMove",
+            "child1 Final PanMove",
+        ]
+    );
+    record.borrow_mut().clear();
+    host.send_pointer(PointerEvent::pan(PointerEventType::PanEnd, cursor, Offset::ZERO));
+    assert_eq!(
+        kinds(&record),
+        ["child1 Initial PanEnd", "child1 Main PanEnd", "child1 Final PanEnd"]
+    );
+
+    // Transition back to hover over `child2`, then move within `child2`.
+    record.borrow_mut().clear();
+    host.send_pointer(hover(10.0, 10.0));
+    assert_eq!(kinds(&record), ["child2 Initial Enter", "child2 Main Enter", "child2 Final Enter"]);
+    record.borrow_mut().clear();
+    host.send_pointer(hover(20.0, 20.0));
+    assert_eq!(kinds(&record), ["child2 Initial Move", "child2 Main Move", "child2 Final Move"]);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/pointer/HitPathTrackerTest.kt, trackpadPan_syntheticHoverConsumption_doesNotMutatePanChanges
+/// Consuming the synthetic `Enter` delivered when a `PanStart` begins over an unhovered node does
+/// not mark the `PanStart`'s own change consumed.
+#[test]
+fn consuming_a_pans_synthetic_enter_leaves_its_pan_change_unconsumed() {
+    struct ConsumeEnter(Rc<RefCell<Vec<(PointerEventType, bool)>>>);
+    impl ModifierNode for ConsumeEnter {
+        fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
+            Some(self)
+        }
+    }
+    impl PointerInputModifierNode for ConsumeEnter {
+        fn takes_whole_events(&self) -> bool {
+            true
+        }
+        fn on_pointer_events(
+            &mut self,
+            event: &PointerEvents,
+            pass: PointerEventPass,
+            _: IntSize,
+            _: &mut EventContext<'_>,
+        ) {
+            if pass == PointerEventPass::Final {
+                if event.kind == PointerEventType::Enter {
+                    for change in &event.changes {
+                        change.consume();
+                    }
+                }
+                self.0.borrow_mut().push((event.kind, event.changes[0].is_consumed()));
+            }
+        }
+    }
+    struct ConsumeEnterElement(Rc<RefCell<Vec<(PointerEventType, bool)>>>);
+    impl ModifierNodeElement for ConsumeEnterElement {
+        type Node = ConsumeEnter;
+        fn create(&self) -> ConsumeEnter {
+            ConsumeEnter(self.0.clone())
+        }
+        fn update(&self, _: &mut ConsumeEnter) {}
+        fn same(&self, _: &Self) -> bool {
+            true
+        }
+    }
+
+    let seen: Rc<RefCell<Vec<(PointerEventType, bool)>>> = Rc::default();
+    let log = seen.clone();
+    let mut host = host(move || {
+        Leaf(Modifier.size(100.dp()).then_custom(ConsumeEnterElement(log.clone())));
+    });
+    host.send_pointer(PointerEvent::pan(
+        PointerEventType::PanStart,
+        Offset::new(10.0, 10.0),
+        Offset::ZERO,
+    ));
+    assert_eq!(
+        *seen.borrow(),
+        [(PointerEventType::Enter, true), (PointerEventType::PanStart, false)]
+    );
+}
+
 // ---- A mouse's buttons ---------------------------------------------------------------------------
 
 // Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/input/pointer/PointerEvent.kt, PointerButtons
@@ -1379,7 +2279,10 @@ fn a_mouse_stays_with_what_its_first_button_pressed_until_the_last_is_up() {
     assert_eq!(last.event.kind, PointerEventType::Release);
     assert!(last.event.changes[0].changed_to_up());
     assert!(!last.event.buttons.are_any_pressed());
-    // Then it hovers, whatever's under it.
+    // Then it hovers, whatever's under it: at its next move, as Compose's release hit-tests
+    // nothing (D2361).
+    assert!(presses(&record, "b").is_empty());
+    host.send_pointer(PointerEvent::moved(over_b, false));
     let heard = presses(&record, "b");
     assert_eq!(heard.first().map(|it| it.event.kind), Some(PointerEventType::Enter));
 }

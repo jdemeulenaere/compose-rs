@@ -467,7 +467,7 @@ impl DragGestureNode {
                             Detection::AwaitTouchSlop { down, pointer: other, verify_in_final };
                     }
                 }
-            } else if event.kind == PointerEventType::Move {
+            } else if event.kind_moving() == PointerEventType::Move {
                 match self.slop.post_slop_offset(moved, slop, self.orientation) {
                     Some(post_slop) => {
                         self.accumulator = self.accumulator + moved;
@@ -578,7 +578,7 @@ impl DragGestureNode {
                     };
                 }
             }
-        } else if event.kind == PointerEventType::Move {
+        } else if event.kind_moving() == PointerEventType::Move {
             if consumed_by_other {
                 self.queue.send(DragEvent::Cancelled);
             } else {
@@ -692,19 +692,19 @@ impl PointerInputModifierNode for DragGestureNode {
         }
         if !self.enabled
             || !matches!(
-                event.kind,
+                event.kind_moving(),
                 PointerEventType::Press | PointerEventType::Move | PointerEventType::Release
             )
         {
             return;
         }
         // A pointer that isn't down isn't dragging (a mouse moving over it).
-        if event.kind == PointerEventType::Move && !self.pressed.contains(&event.pointer) {
+        if event.kind_moving() == PointerEventType::Move && !self.pressed.contains(&event.pointer) {
             return;
         }
         let in_window = context.pointer_position().unwrap_or(event.position);
         let last = self.last_in_window.iter().find(|(pointer, _)| *pointer == event.pointer);
-        let moved = if event.kind == PointerEventType::Move {
+        let moved = if event.kind_moving() == PointerEventType::Move {
             last.map_or(Offset::ZERO, |&(_, at)| in_window - at)
         } else {
             Offset::ZERO

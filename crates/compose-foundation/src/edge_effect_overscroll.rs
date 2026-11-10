@@ -367,7 +367,7 @@ impl Shared {
         if pass != PointerEventPass::Main {
             return;
         }
-        match event.kind {
+        match event.kind_moving() {
             // `awaitFirstDown`: the first down of a gesture, a new one once it's up.
             PointerEventType::Press => {
                 if self.pointer.get().is_none() {

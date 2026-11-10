@@ -191,8 +191,6 @@ fn click_press_in_release_in() {
 // Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/injectionscope/mouse/ClickTest.kt, click_pressIn_moveOutIn_releaseIn
 /// A held mouse dragged out of the box and back: the box hears it exit and enter, pressed.
 #[test]
-#[ignore = "a held mouse moved out of a node doesn't exit it (handoff.md, ignored tests: \
-            press_move_release)"]
 fn click_press_in_move_out_in_release_in() {
     let heard = run(|mouse| {
         mouse.move_to(IN);
@@ -217,8 +215,6 @@ fn click_press_in_move_out_in_release_in() {
 // Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/injectionscope/mouse/ClickTest.kt, click_pressIn_releaseOut
 /// Released out of the box, the box heard its pressed exit as the drag left it, then the release.
 #[test]
-#[ignore = "a held mouse moved out of a node doesn't exit it (handoff.md, ignored tests: \
-            press_move_release)"]
 fn click_press_in_release_out() {
     let heard = run(|mouse| {
         mouse.move_to(IN);

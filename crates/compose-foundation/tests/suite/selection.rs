@@ -138,3 +138,25 @@ fn losing_the_focus_clears_the_selection() {
     ui.wait_for_idle();
     assert_eq!(ui.host().with_tree(|tree| tree.selected_text()), None);
 }
+
+#[test]
+fn a_mouse_drag_leaving_the_container_extends_the_selection_at_its_exit() {
+    let mut ui = ComposeTestRule::sized(compose_ui::IntSize::new(300, 200), || {
+        Box!(modifier = Modifier.fill_max_size(), {
+            SelectionContainer!(
+                modifier = Modifier.size(compose_ui::DpSize::new(200.dp(), 30.dp())),
+                {
+                    BasicText!("Hello world", modifier = Modifier.test_tag("first"));
+                }
+            );
+        });
+    });
+    let from = at(&mut ui, "first", 0);
+    // One pressed move far past the container's right and bottom edges (its pressed Exit).
+    let outside = Offset::new(280.0, 150.0);
+    ui.host().send_pointer(PointerEvent::press(from));
+    ui.host().send_pointer(PointerEvent::moved(outside, true));
+    ui.host().send_pointer(PointerEvent::release(outside));
+    ui.wait_for_idle();
+    assert_eq!(ui.host().with_tree(|tree| tree.selected_text()).as_deref(), Some("Hello world"));
+}

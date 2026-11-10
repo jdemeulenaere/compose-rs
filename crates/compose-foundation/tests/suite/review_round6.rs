@@ -410,8 +410,9 @@ fn passes_degenerate_grids_and_scrollbars_do_not_panic() {
 }
 
 /// A mouse pressing a clickable, dragging onto another and releasing there: as Compose, the
-/// first keeps its hover during the drag (its pointer is captured) and hears `Exit` at the
-/// release, the second `Enter`. A disabled clickable shows no hover layer. A lock-in.
+/// first hears `Exit` as the pressed drag leaves its bounds (nothing hovered meanwhile), a
+/// release itself hit-tests nothing, and the next unpressed move enters the second. A disabled
+/// clickable shows no hover layer. A lock-in.
 #[test]
 fn passes_hover_moves_at_the_release_of_a_drag() {
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
@@ -470,9 +471,12 @@ fn passes_hover_moves_at_the_release_of_a_drag() {
     ui.host().send_pointer(PointerEvent::press(Offset::new(10.0, 10.0)));
     ui.host().send_pointer(PointerEvent::moved(Offset::new(10.0, 60.0), true));
     ui.wait_for_idle();
-    // Out of its bounds the press is cancelled (as Compose's tap detection), the hover kept.
-    assert_eq!(layers(&mut ui), vec![(1, 20)], "still hovered, the second not");
+    // Out of its bounds it hears pressed Exit and ends hover; the second isn't on the path.
+    assert_eq!(layers(&mut ui), vec![], "first exited, the second not entered yet");
     ui.host().send_pointer(PointerEvent::release(Offset::new(10.0, 60.0)));
+    ui.wait_for_idle();
+    assert_eq!(layers(&mut ui), vec![], "release alone hit-tests nothing");
+    ui.host().send_pointer(PointerEvent::moved(Offset::new(10.0, 60.0), false));
     ui.wait_for_idle();
     assert_eq!(layers(&mut ui), vec![(2, 20)]);
     ui.host().send_pointer(PointerEvent::moved(Offset::new(10.0, 110.0), false));

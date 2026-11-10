@@ -169,8 +169,9 @@ pub(crate) fn handle(state: &mut InputState, host: &mut UiHost, event: &WindowEv
         WindowEvent::CursorEntered { .. } => state.left = false,
         WindowEvent::CursorLeft { .. } | WindowEvent::Focused(false) => {
             state.buttons = PointerButtons::NONE;
-            host.with_tree(|tree| tree.cancel_pointers());
+            // Hover exits before cancel_pointers clears the hover paths (D2362).
             host.send_pointer_left();
+            host.with_tree(|tree| tree.cancel_pointers());
         }
         WindowEvent::ModifiersChanged(modifiers) => {
             let modifiers = modifiers.state();
@@ -325,6 +326,31 @@ mod button_tests {
         // A small number is X11's for one of those it named: past them, not on them.
         assert!(PointerButtons(button_bit(MouseButton::Other(1))).is_pressed(5));
         assert!(!PointerButtons(button_bit(MouseButton::Other(1))).is_secondary_pressed());
+    }
+
+    #[test]
+    fn cursor_leaving_the_window_delivers_exit_before_cancelling() {
+        let heard = Heard::default();
+        let seen = heard.clone();
+        let mut host = UiHost::headless(100, 100);
+        host.set_content(move || {
+            compose_ui::Layout(
+                Modifier.size(50.dp()).then_custom(Recorder(seen.clone())),
+                compose_ui::empty_measure_policy(),
+                compose_runtime::callback(|| {}),
+            );
+        });
+        host.frame();
+        let mut state = InputState::default();
+        let device = DeviceId::dummy();
+        let moved = WindowEvent::CursorMoved {
+            device_id: device,
+            position: winit::dpi::PhysicalPosition::new(10.0, 10.0),
+        };
+        let left = WindowEvent::CursorLeft { device_id: device };
+        handle(&mut state, &mut host, &moved);
+        handle(&mut state, &mut host, &left);
+        assert_eq!(*heard.borrow(), [(PointerEventType::Exit, PointerButtons::NONE, false)]);
     }
 }
 

@@ -188,6 +188,9 @@ impl LiveChange {
             ) => return None,
             (kind, _, _) => kind,
         };
+        // A hover's own enter or exit (a press's, a release's) isn't held, whatever the buttons.
+        let now = now
+            && (event.pressed || !matches!(kind, PointerEventType::Enter | PointerEventType::Exit));
         Some(PointerEvent { kind, pressed: now, ..event })
     }
 }
@@ -250,11 +253,41 @@ struct HitBranch {
     children: smallvec::SmallVec<[usize; 2]>,
     /// Whether what's around it waits for a gesture past a press, in one of the paths.
     waiting: bool,
+    /// The kind its event has for it, and the change that makes it so: `Enter` or `Exit` where
+    /// the mouse came in or left (D2360). One pointer hovers, so one change at most.
+    kind: Option<(usize, PointerEventType)>,
+}
+
+/// Whether two hit entries are one pointer input node, as a hit path keeps it: its node, its place
+/// in the chain, the chain's version, and its delegate.
+fn same_node(a: &HitEntry, b: &HitEntry) -> bool {
+    a.node == b.node && a.index == b.index && a.version == b.version && a.delegate == b.delegate
+}
+
+/// How many entries `a` and `b` start with alike: what `HitPathTracker.addHitPath` merges of a new
+/// path into the tree before it adds the rest as new nodes.
+fn shared_start(a: &[HitEntry], b: &[HitEntry]) -> usize {
+    a.iter().zip(b).take_while(|(a, b)| same_node(a, b)).count()
+}
+
+/// The kinds of a path's entries that go on past `common` entries shared with another path: each
+/// `kind` from there, none (the event's) before.
+fn kinds_past(common: usize, len: usize, kind: PointerEventType) -> Vec<Option<PointerEventType>> {
+    let mut kinds = vec![None; common];
+    kinds.resize(len, Some(kind));
+    kinds
 }
 
 impl HitBranches {
-    /// Adds the path of change `change`, with what's waiting around each of its entries.
-    fn add(&mut self, path: &[HitEntry], change: usize, waiting: &[bool]) {
+    /// Adds the path of change `change`, with what's waiting around each of its entries and the
+    /// kind its event has for each (none: the event's).
+    fn add(
+        &mut self,
+        path: &[HitEntry],
+        change: usize,
+        waiting: &[bool],
+        kinds: &[Option<PointerEventType>],
+    ) {
         let mut parent: Option<usize> = None;
         for (index, entry) in path.iter().enumerate() {
             let siblings: &[usize] = match parent {
@@ -271,6 +304,7 @@ impl HitBranches {
                         changes: smallvec::SmallVec::new(),
                         children: smallvec::SmallVec::new(),
                         waiting: false,
+                        kind: None,
                     });
                     match parent {
                         Some(parent) => self.all[parent].children.push(at),
@@ -280,8 +314,14 @@ impl HitBranches {
                 }
             };
             let branch = &mut self.all[at];
-            branch.changes.push(change);
+            // A hover's paths before and after its move share their start: one change there.
+            if branch.changes.last() != Some(&change) {
+                branch.changes.push(change);
+            }
             branch.waiting |= waiting.get(index).copied().unwrap_or(false);
+            if let Some(kind) = kinds.get(index).copied().flatten() {
+                branch.kind = Some((change, kind));
+            }
             parent = Some(at);
         }
     }
@@ -514,8 +554,8 @@ impl UiTree {
                 _ => self.hit_test(position),
             };
             // A mouse's hover: what it left hears `Exit`, what it came over `Enter`, as Compose's
-            // (not while a button is held: a drag stays with what it pressed; nor in a pinch,
-            // whose fingers don't hover).
+            // (while a button is held, the nodes of what it pressed each by its bounds, D2361; not
+            // in a pinch, whose fingers don't hover).
             let is_mouse = event.pointer_type == crate::input::PointerType::Mouse;
             let hovering = is_mouse
                 && event.kind != PointerEventType::Scroll
@@ -536,30 +576,57 @@ impl UiTree {
                 )
                 && (self.stylus.is_some() || !event.pressed);
             let mut path = path;
+            // The kind of the event for each entry of `path` (none: the event's), and the path a
+            // hover moved off with what it shares of `path`, its rest hearing `Exit` (D2360).
+            let mut kinds: Vec<Option<PointerEventType>> = Vec::new();
+            let mut left: Option<(Vec<HitEntry>, usize)> = None;
             if stylus_hovering {
                 let hovers = !event.pressed && event.kind == PointerEventType::Move;
                 self.stylus = hovers.then_some(event);
-                let now = if hovers { path.clone() } else { Vec::new() };
-                let hover = PointerEvent { pressed: false, ..event };
-                let entered = self.update_hover(now, hover, true, &mut actions, &mut requests);
-                if !entered.is_empty() {
-                    path.retain(|entry| !entered.contains(entry));
+                if hovers && captured.is_none() {
+                    left = self.hover_move(&path, true, &mut kinds);
+                } else {
+                    let now = if hovers { path.clone() } else { Vec::new() };
+                    let hover = PointerEvent { pressed: false, ..event };
+                    let entered = self.update_hover(now, hover, true, &mut actions, &mut requests);
+                    if !entered.is_empty() {
+                        path.retain(|entry| !entered.contains(entry));
+                    }
                 }
             }
             if hovering {
-                let now = if event.kind.is_pan() && captured.is_some() {
-                    self.still_under(&path, position)
-                } else if event.kind == PointerEventType::Release || captured.is_some() {
-                    self.hit_test(position)
+                if event.kind == PointerEventType::Move && captured.is_none() {
+                    // One dispatch, as Compose's hit path tree: what it came over hears the move as
+                    // `Enter`, what it left as `Exit`, what it stays over the move.
+                    left = self.hover_move(&path, false, &mut kinds);
+                } else if event.kind == PointerEventType::Release && captured.is_some() {
+                    // As Compose's: no hit test at a release. What of its path the mouse is in
+                    // stays hovered (what it left heard its exit then); what's under it now, but
+                    // not on its path, it comes over at its next move.
+                    self.follow_pressed_hover(&path, position, None);
                 } else {
-                    path.clone()
-                };
-                let entered = self.update_hover(now, event, false, &mut actions, &mut requests);
-                // A hover move hears `Enter` where it comes in, not the move too, as Compose's
-                // `HitPathTracker` makes the move an `Enter` there.
-                if event.kind == PointerEventType::Move && !entered.is_empty() {
-                    path.retain(|entry| !entered.contains(entry));
+                    let now = if event.kind.is_pan() && captured.is_some() {
+                        self.still_under(&path, position)
+                    } else if event.kind == PointerEventType::Release || captured.is_some() {
+                        self.hit_test(position)
+                    } else {
+                        path.clone()
+                    };
+                    // A press's enters aren't held: it's not down where they come.
+                    let hover = PointerEvent { pressed: false, ..event };
+                    let entered = self.update_hover(now, hover, false, &mut actions, &mut requests);
+                    if event.kind == PointerEventType::Move && !entered.is_empty() {
+                        path.retain(|entry| !entered.contains(entry));
+                    }
                 }
+            } else if is_mouse
+                && event.pressed
+                && event.kind == PointerEventType::Move
+                && captured.is_some()
+            {
+                // A held mouse's move: each node of its path is in while the mouse is in its
+                // bounds, and hears the move as `Exit` or `Enter` where that changes (D2361).
+                self.follow_pressed_hover(&path, position, Some(&mut kinds));
             }
             // For a press, whether something before each entry (around it) waits for a gesture past
             // it, as Compose's `hasWaitingParent`.
@@ -568,18 +635,23 @@ impl UiTree {
             } else {
                 Vec::new()
             };
-            if all.len() == 1 {
-                alone = Some((path, waiting));
+            if all.len() == 1 && left.is_none() {
+                alone = Some((path, waiting, kinds));
             } else {
-                branches.add(&path, live.len(), &waiting);
+                // The path left first: Compose's tree has its nodes before the new ones.
+                if let Some((before, common)) = left {
+                    let exits = kinds_past(common, before.len(), PointerEventType::Exit);
+                    branches.add(&before, live.len(), &[], &exits);
+                }
+                branches.add(&path, live.len(), &waiting, &kinds);
             }
             live.push(LiveChange::new(event, previous, resting));
         }
         let kind = event_kind(events);
         let mut delivery =
             Delivery { live: &live, kind, actions: &mut actions, requests: &mut requests };
-        if let Some((path, waiting)) = alone {
-            self.deliver_along(&path, &waiting, &mut delivery);
+        if let Some((path, waiting, kinds)) = alone {
+            self.deliver_along(&path, &waiting, &kinds, &mut delivery);
         } else {
             for &root in &branches.roots {
                 self.deliver_initial_and_main(&branches, root, &mut delivery);
@@ -649,10 +721,18 @@ impl UiTree {
         }
     }
 
-    /// The only change of an event through the passes along its path, in the order of a branch's.
-    fn deliver_along(&mut self, path: &[HitEntry], waiting: &[bool], delivery: &mut Delivery<'_>) {
-        for entry in path {
-            self.deliver_changes(entry, &[0], PointerEventPass::Initial, false, delivery);
+    /// The only change of an event through the passes along its path, in the order of a branch's;
+    /// each entry hearing it as the kind `kinds` has for it, if any.
+    fn deliver_along(
+        &mut self,
+        path: &[HitEntry],
+        waiting: &[bool],
+        kinds: &[Option<PointerEventType>],
+        delivery: &mut Delivery<'_>,
+    ) {
+        let kind = |at: usize| kinds.get(at).copied().flatten().map(|kind| (0, kind));
+        for (at, entry) in path.iter().enumerate() {
+            self.deliver_changes(entry, &[0], PointerEventPass::Initial, false, kind(at), delivery);
         }
         // From the inside out; but one node's delegates in delegation order.
         let mut end = path.len();
@@ -662,13 +742,15 @@ impl UiTree {
                 start -= 1;
             }
             for (index, entry) in path[start..end].iter().enumerate() {
-                let waiting_parent = waiting.get(start + index).copied().unwrap_or(false);
-                self.deliver_changes(entry, &[0], PointerEventPass::Main, waiting_parent, delivery);
+                let at = start + index;
+                let waiting_parent = waiting.get(at).copied().unwrap_or(false);
+                let pass = PointerEventPass::Main;
+                self.deliver_changes(entry, &[0], pass, waiting_parent, kind(at), delivery);
             }
             end = start;
         }
-        for entry in path {
-            self.deliver_changes(entry, &[0], PointerEventPass::Final, false, delivery);
+        for (at, entry) in path.iter().enumerate() {
+            self.deliver_changes(entry, &[0], PointerEventPass::Final, false, kind(at), delivery);
         }
     }
 
@@ -691,7 +773,14 @@ impl UiTree {
         loop {
             let branch = &branches.all[current];
             let pass = PointerEventPass::Initial;
-            self.deliver_changes(&branch.entry, &branch.changes, pass, false, delivery);
+            self.deliver_changes(
+                &branch.entry,
+                &branch.changes,
+                pass,
+                false,
+                branch.kind,
+                delivery,
+            );
             if current == last {
                 break;
             }
@@ -704,7 +793,8 @@ impl UiTree {
         loop {
             let branch = &branches.all[current];
             let pass = PointerEventPass::Main;
-            self.deliver_changes(&branch.entry, &branch.changes, pass, branch.waiting, delivery);
+            let (changes, waiting) = (&branch.changes, branch.waiting);
+            self.deliver_changes(&branch.entry, changes, pass, waiting, branch.kind, delivery);
             if current == last {
                 break;
             }
@@ -716,7 +806,7 @@ impl UiTree {
     fn deliver_final(&mut self, branches: &HitBranches, at: usize, delivery: &mut Delivery<'_>) {
         let branch = &branches.all[at];
         let pass = PointerEventPass::Final;
-        self.deliver_changes(&branch.entry, &branch.changes, pass, false, delivery);
+        self.deliver_changes(&branch.entry, &branch.changes, pass, false, branch.kind, delivery);
         for &child in &branch.children {
             self.deliver_final(branches, child, delivery);
         }
@@ -774,16 +864,25 @@ impl UiTree {
     }
 
     /// Sends the changes of `which`, in a pass, to one entry of a hit path: together if it takes them
-    /// so (`takes_whole_events`), else one at a time.
+    /// so (`takes_whole_events`), else one at a time; as `kind`'s kind where its change is, the
+    /// entry's own (`Enter` or `Exit` for a move, D2360).
     fn deliver_changes(
         &mut self,
         entry: &HitEntry,
         which: &[usize],
         pass: PointerEventPass,
         waiting_parent: bool,
+        own_kind: Option<(usize, PointerEventType)>,
         delivery: &mut Delivery<'_>,
     ) {
-        if self.get(entry.node).is_none_or(|value| value.chain_version != entry.version) {
+        let hover_exit = delivery.kind == PointerEventType::Exit
+            || (matches!(own_kind, Some((_, PointerEventType::Exit)))
+                && which.first().is_some_and(|&at| !delivery.live[at].event.pressed));
+        if self.get(entry.node).is_none_or(|value| {
+            value.chain_version != entry.version
+                || !value.attached
+                || (!value.placed && !hover_exit)
+        }) {
             return;
         }
         // A block waiting in another pass: nothing to make its event for.
@@ -804,7 +903,10 @@ impl UiTree {
                 changes: which.iter().map(|&at| live[at].change_at(origin)).collect(),
                 buttons: first.buttons,
                 keyboard_modifiers: first.keyboard_modifiers,
-                kind: *kind,
+                kind: match own_kind {
+                    Some((_, own)) if *kind == PointerEventType::Move => own,
+                    _ => *kind,
+                },
             };
             let position = first.position;
             self.with_event_context(
@@ -842,6 +944,14 @@ impl UiTree {
                 change.as_primary_button()
             };
             let Some(mut event) = view else { continue };
+            // A move coming over or leaving the entry is its `Enter` or `Exit`; not a press or a
+            // release a button made of it.
+            if let Some((own, kind)) = own_kind
+                && own == at
+                && event.kind == PointerEventType::Move
+            {
+                event.kind = kind;
+            }
             let position = event.position;
             event.position = position - origin;
             event.consumed = change.consumed.get();
@@ -905,8 +1015,9 @@ impl UiTree {
         })
     }
 
-    /// Moves the mouse's hover (a hovering `stylus`'s) to the entries of `now`: `Exit` to those
-    /// it left, `Enter` to those it came over (in the main pass).
+    /// Moves the mouse's hover (a hovering `stylus`'s) to the entries of `now`, as its own
+    /// dispatch (a press, a release, a layout moving what's under it, the window left): what it
+    /// left of the path it shared with `now` hears `Exit`, then what it came over `Enter`.
     /// Returns the entries it came over.
     fn update_hover(
         &mut self,
@@ -918,14 +1029,10 @@ impl UiTree {
     ) -> Vec<HitEntry> {
         let before =
             std::mem::take(if stylus { &mut self.stylus_hovered } else { &mut self.hovered });
-        let same = |a: &HitEntry, b: &HitEntry| {
-            a.node == b.node && a.index == b.index && a.version == b.version
-        };
-        let left: Vec<HitEntry> =
-            before.iter().filter(|old| !now.iter().any(|new| same(old, new))).cloned().collect();
-        let entered: Vec<HitEntry> =
-            now.iter().filter(|new| !before.iter().any(|old| same(old, new))).cloned().collect();
-        self.deliver_hover(&left, PointerEventType::Exit, event, actions, requests);
+        // As Compose's hit path tree: what starts alike stays, the rest of each path is new.
+        let common = shared_start(&before, &now);
+        let entered = now[common..].to_vec();
+        self.deliver_hover(&before[common..], PointerEventType::Exit, event, actions, requests);
         self.deliver_hover(&entered, PointerEventType::Enter, event, actions, requests);
         if stylus {
             self.stylus_hovered = now;
@@ -935,9 +1042,8 @@ impl UiTree {
         entered
     }
 
-    /// Delivers `kind` (`Enter` or `Exit`) to `entries` (outer to inner), each its own event,
-    /// through the three passes as any event: initial outer to inner, main inner to outer,
-    /// final outer to inner.
+    /// Delivers `kind` (`Enter` or `Exit`) to `entries` (outer to inner, a part of a path) through
+    /// the three passes as any event, one change they share as Compose's nodes share an event's.
     fn deliver_hover(
         &mut self,
         entries: &[HitEntry],
@@ -946,23 +1052,91 @@ impl UiTree {
         actions: &mut Vec<Action>,
         requests: &mut Requests,
     ) {
+        if entries.is_empty() {
+            return;
+        }
         let previous = self.pointer_states.iter().find(|it| it.0 == event.pointer).map(|it| it.1);
-        let live: Vec<LiveChange> = entries
-            .iter()
-            .map(|_| {
-                LiveChange::new(PointerEvent { kind, consumed: false, ..event }, previous, false)
-            })
-            .collect();
+        let live =
+            [LiveChange::new(PointerEvent { kind, consumed: false, ..event }, previous, false)];
         let mut delivery = Delivery { live: &live, kind, actions, requests };
-        for pass in [PointerEventPass::Initial, PointerEventPass::Main, PointerEventPass::Final] {
-            let mut order: Vec<usize> = (0..entries.len()).collect();
-            if pass == PointerEventPass::Main {
-                order.reverse();
+        self.deliver_along(entries, &[], &[], &mut delivery);
+    }
+
+    /// A hover's move to `now`, the path hit where it is (the mouse's, or a `stylus`'s), as
+    /// `HitPathTracker` takes it into its tree in the move's own dispatch (D2360): `now` merges
+    /// into the path hovered where they start alike, and each entry past that comes over hears
+    /// the move as `Enter` (in `kinds`). Returns the path hovered before and how much of it `now`
+    /// shares, if it went on past that: its rest left, to hear the move as `Exit`.
+    fn hover_move(
+        &mut self,
+        now: &[HitEntry],
+        stylus: bool,
+        kinds: &mut Vec<Option<PointerEventType>>,
+    ) -> Option<(Vec<HitEntry>, usize)> {
+        let hovered = if stylus { &mut self.stylus_hovered } else { &mut self.hovered };
+        let common = shared_start(hovered, now);
+        // Over the same nodes, as most moves: nothing to make.
+        if common == now.len() && common == hovered.len() {
+            hovered.copy_from_slice(now);
+            return None;
+        }
+        let before = std::mem::replace(hovered, now.to_vec());
+        if common < now.len() {
+            *kinds = kinds_past(common, now.len(), PointerEventType::Enter);
+        }
+        (common < before.len()).then_some((before, common))
+    }
+
+    /// A held mouse's change along the path it pressed, as Compose's hit path nodes each keep
+    /// their `isIn` (D2361): an entry is in while the mouse is in its bounds, their edges
+    /// included (`isOutOfBounds`); with `kinds` (a move), one it came into or left hears the move
+    /// as `Enter` or `Exit`. What it's in is what it hovers. At its release (no `kinds`), what it
+    /// left goes with what's below it, as Compose's tree drops a node released outside with its
+    /// children: the hover is the path's start it's in.
+    fn follow_pressed_hover(
+        &mut self,
+        path: &[HitEntry],
+        position: Offset,
+        mut kinds: Option<&mut Vec<Option<PointerEventType>>>,
+    ) {
+        let release = kinds.is_none();
+        let before = std::mem::take(&mut self.hovered);
+        let mut now = Vec::with_capacity(path.len());
+        for (at, entry) in path.iter().enumerate() {
+            let inside = self.holds(entry, position);
+            if release && !inside {
+                break;
             }
-            for index in order {
-                self.deliver_changes(&entries[index], &[index], pass, false, &mut delivery);
+            let was = before.iter().any(|it| same_node(it, entry));
+            if inside != was
+                && let Some(kinds) = kinds.as_deref_mut()
+            {
+                if kinds.is_empty() {
+                    kinds.resize(path.len(), None);
+                }
+                kinds[at] =
+                    Some(if inside { PointerEventType::Enter } else { PointerEventType::Exit });
+            }
+            if inside {
+                now.push(*entry);
             }
         }
+        self.hovered = now;
+    }
+
+    /// Whether `position` (in the root) is in `entry`'s bounds, their edges included, as a
+    /// change's `isOutOfBounds(size)` says it isn't out of them.
+    fn holds(&self, entry: &HitEntry, position: Offset) -> bool {
+        let Some(value) = self.get(entry.node) else { return false };
+        if value.chain_version != entry.version || !value.placed || !value.attached {
+            return false;
+        }
+        let size = value.layers[entry.layer as usize].measured;
+        let local = position - self.layer_origin(entry.node, entry.layer as usize);
+        local.x >= 0.0
+            && local.y >= 0.0
+            && local.x <= size.width as f32
+            && local.y <= size.height as f32
     }
 
     /// The mouse pointer's look where it is, as Compose's `PointerIconService.getIcon`: the
@@ -1089,16 +1263,48 @@ impl UiTree {
         actions
     }
 
-    /// Ends every pointer gesture in progress, as when the window loses the pointer.
+    /// Ends every pointer gesture in progress, as when the window loses the pointer: as Compose's
+    /// `processCancel`, every node of the hit paths hears it, what the mouse (or a stylus) hovers
+    /// too, and they're forgotten: its next move enters them again (D2362).
     pub fn cancel_pointers(&mut self) {
         self.pointer_states.clear();
         self.panning = false;
+        self.mouse = None;
+        self.stylus = None;
         let captures = std::mem::take(&mut self.captures);
-        let paths: Vec<&[HitEntry]> = captures.iter().map(|(_, path)| &path[..]).collect();
+        let hovers = [std::mem::take(&mut self.hovered), std::mem::take(&mut self.stylus_hovered)];
+        let mut paths: Vec<&[HitEntry]> = captures.iter().map(|(_, path)| &path[..]).collect();
+        paths.extend(hovers.iter().map(|path| &path[..]));
+        self.tell_cancel(&paths, None);
+    }
+
+    /// Tells the entries of `paths` (each from the root down) their gesture is cancelled, as
+    /// Compose's hit path tree cancels them (D1931, D2120). With `removed`, a node's entries its
+    /// chain no longer has (those of its chain's last version, by their places in it) are told in
+    /// those.
+    fn tell_cancel(
+        &mut self,
+        paths: &[&[HitEntry]],
+        mut removed: Option<(NodeId, u32, &mut [Option<crate::node_chain::ChainEntry>])>,
+    ) {
         let mut told: Vec<HitEntry> = Vec::new();
-        cancel_order(&paths, &mut told);
+        cancel_order(paths, &mut told);
         delegates_in_delegation_order(&mut told);
         for entry in told {
+            if let Some((node, old_version, entries)) = removed.as_mut()
+                && entry.node == *node
+                && entry.version == *old_version
+            {
+                if let Some(handler) = entries
+                    .get_mut(entry.index as usize)
+                    .and_then(Option::as_mut)
+                    .and_then(|chain_entry| chain_entry.resolve(entry.delegate))
+                    .and_then(|node| node.as_pointer_input())
+                {
+                    handler.on_cancel_pointer_input();
+                }
+                continue;
+            }
             if let Some(value) = self.get_mut(entry.node)
                 && value.chain_version == entry.version
                 && let Some(handler) = value.chain[entry.index as usize]
@@ -1112,6 +1318,114 @@ impl UiTree {
             }
         }
         self.sync_noted_delegates();
+    }
+
+    /// The innermost overlay `node` is in, or `None` for the main window: a pass-through overlay
+    /// (`Popup`'s outside-click catcher) precedes the main window's hit path in `hit_test`, where
+    /// in Compose it is a separate window rather than an ancestor of what's beneath.
+    fn hit_window_of(&self, mut node: NodeId) -> Option<NodeId> {
+        loop {
+            let value = self.get(node)?;
+            if value.overlay {
+                return Some(node);
+            }
+            node = value.parent?;
+        }
+    }
+
+    /// Cuts each pointer's path, and the hovers, at its first entry `at` says in each window's
+    /// run: the rests cut off. A pointer whose path is cut keeps what's left of it (and any window
+    /// beneath a pass-through overlay that closed): its gesture goes on there, as Compose's goes on
+    /// in what its window's tree keeps.
+    fn cut_pointer_paths(
+        &mut self,
+        mut at: impl FnMut(&UiTree, &HitEntry) -> bool,
+    ) -> Vec<Vec<HitEntry>> {
+        let mut captures = std::mem::take(&mut self.captures);
+        let mut hovered = std::mem::take(&mut self.hovered);
+        let mut stylus = std::mem::take(&mut self.stylus_hovered);
+        let mut rests = Vec::new();
+        let paths = captures.iter_mut().map(|(_, path)| path);
+        for path in paths.chain([&mut hovered, &mut stylus]) {
+            let mut cursor = 0;
+            while cursor < path.len() {
+                let window = self.hit_window_of(path[cursor].node);
+                let mut end = cursor + 1;
+                while end < path.len() && self.hit_window_of(path[end].node) == window {
+                    end += 1;
+                }
+                if let Some(rel) = path[cursor..end].iter().position(|entry| at(self, entry)) {
+                    rests.push(path.drain(cursor + rel..end).collect());
+                    cursor += rel;
+                } else {
+                    cursor = end;
+                }
+            }
+        }
+        self.captures = captures;
+        self.hovered = hovered;
+        self.stylus_hovered = stylus;
+        rests
+    }
+
+    /// Points the hit paths' entries of `node`'s modifier nodes at their new places in its chain
+    /// (`matched`: each new place's old one), so a gesture in progress, or the hover, goes on with a
+    /// node that was kept. An entry its chain no longer has (in `removed`, by its old place) is cut
+    /// off its paths with what's below it, and they're told their gesture is cancelled, innermost
+    /// first, as Compose's `removePointerInputModifierNode` as the node detaches (D2363).
+    pub(crate) fn remap_captures(
+        &mut self,
+        node: NodeId,
+        matched: &[Option<usize>],
+        removed: &mut [Option<crate::node_chain::ChainEntry>],
+    ) {
+        if self.captures.is_empty() && self.hovered.is_empty() && self.stylus_hovered.is_empty() {
+            return;
+        }
+        let value = self.node(node);
+        let version = value.chain_version;
+        let layers: smallvec::SmallVec<[u16; 8]> =
+            (0..value.chain.len()).map(|index| value.layer_of(index) as u16).collect();
+        // Any version's, as before: an entry hovered across a reset kept its node.
+        let remap = |entry: &mut HitEntry| {
+            if entry.node == node
+                && entry.version != version
+                && let Some(new_index) =
+                    matched.iter().position(|old| *old == Some(entry.index as usize))
+            {
+                entry.index = new_index as u16;
+                entry.layer = layers[new_index];
+                entry.version = version;
+            }
+        };
+        for (_, path) in &mut self.captures {
+            path.iter_mut().for_each(remap);
+        }
+        self.hovered.iter_mut().for_each(remap);
+        self.stylus_hovered.iter_mut().for_each(remap);
+        // What's left of the old version: the entries removed.
+        // What's left of the old versions: the entries removed. Those of the last are told (the
+        // chain changed with it, `chain_version` counting by one); an older one is no node now.
+        let rests =
+            self.cut_pointer_paths(|_, entry| entry.node == node && entry.version != version);
+        if !rests.is_empty() {
+            let paths: Vec<&[HitEntry]> = rests.iter().map(|rest| &rest[..]).collect();
+            self.tell_cancel(&paths, Some((node, version.wrapping_sub(1), removed)));
+        }
+    }
+
+    /// The subtree at `node` leaving the tree: what pointers hit or hover there is cut off their
+    /// paths with what's below it, and told its gesture is cancelled, innermost first, before
+    /// they're detached, as Compose's `removePointerInputModifierNode` (D2363).
+    pub(crate) fn pointer_paths_leaving(&mut self, node: NodeId) {
+        if self.captures.is_empty() && self.hovered.is_empty() && self.stylus_hovered.is_empty() {
+            return;
+        }
+        let rests = self.cut_pointer_paths(|tree, entry| tree.is_at_or_below(entry.node, node));
+        if !rests.is_empty() {
+            let paths: Vec<&[HitEntry]> = rests.iter().map(|rest| &rest[..]).collect();
+            self.tell_cancel(&paths, None);
+        }
     }
 
     pub(crate) fn apply_requests(&mut self, requests: Requests, actions: &mut Vec<Action>) {

@@ -599,7 +599,7 @@ impl compose_ui::PointerInputModifierNode for ScrimNode {
         use compose_ui::PointerEventType;
         // A move a drag took (by the final pass) is no click.
         if pass == compose_ui::PointerEventPass::Final
-            && event.kind == PointerEventType::Move
+            && event.kind_moving() == PointerEventType::Move
             && event.consumed
         {
             self.pressed = None;

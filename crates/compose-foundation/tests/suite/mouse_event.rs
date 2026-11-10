@@ -94,7 +94,6 @@ fn absent_exit_sent() {
 /// Release]`.
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/pointer/MouseEventTest.kt, pressMoveRelease
 #[test]
-#[ignore = "a pressed mouse moving out of a node: Compose makes the move an Exit for that node, compose-rs delivers the Move and the Exit at the release"]
 fn press_move_release() {
     let (mut ui, events) = centered();
     ui.on_node_with_tag(TAG).perform_mouse_input(|mouse| {

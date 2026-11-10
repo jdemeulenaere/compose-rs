@@ -136,6 +136,19 @@ pub struct PointerEvent {
 }
 
 impl PointerEvent {
+    /// Its kind, a held pointer's `Enter` or `Exit` taken as the move it is: a held mouse's move
+    /// that comes over or leaves a node is that node's `Enter` or `Exit`, as Compose's hit path
+    /// makes it (D2361), and what follows a press or a drag follows the pointer out and back, as
+    /// Compose's gesture detectors, which look at the changes, not the kind.
+    pub fn kind_moving(&self) -> PointerEventType {
+        match self.kind {
+            PointerEventType::Enter | PointerEventType::Exit if self.pressed => {
+                PointerEventType::Move
+            }
+            kind => kind,
+        }
+    }
+
     fn new(kind: PointerEventType, position: Offset, pressed: bool) -> PointerEvent {
         PointerEvent {
             kind,
