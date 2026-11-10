@@ -406,7 +406,7 @@ impl UiTree {
             self.bind_text_actions(node, &mut config);
         }
         // None important for them (a background's alone): the content inside every modifier,
-        // as Compose's `layoutNode.innerCoordinator` (D2326).
+        // as Compose's `layoutNode.innerCoordinator` (D2324).
         let inner = (layer, self.node(node).chain.len());
         let (layer, bounds_entry) = merging_bounds.or(first_bounds).unwrap_or(inner);
         OwnSemantics { config, layer, bounds_entry, has_bounds: first_bounds.is_some() }

@@ -14,7 +14,10 @@ use std::any::Any;
 use std::rc::Rc;
 
 use compose_runtime::ComposeArg;
-use compose_ui::{Density, Dp, HorizontalAlignment, LayoutDirection, VerticalAlignment};
+use compose_ui::{
+    AnyHorizontalAlignment, AnyVerticalAlignment, Density, Dp, HorizontalAlignment,
+    LayoutDirection, VerticalAlignment,
+};
 
 /// How a custom horizontal arrangement places children, as Compose's `Arrangement.Horizontal`.
 pub trait HorizontalArrangementPolicy: Any {
@@ -63,6 +66,43 @@ pub trait VerticalArrangementPolicy: Any {
     }
 }
 
+/// Group alignment inside a `spaced_by` or `aligned` arrangement: bias alignments stay inline as
+/// `f32`, while custom alignment policies use `AnyHorizontalAlignment` / `AnyVerticalAlignment`
+/// (D2441).
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) enum SpacedAlignment {
+    Bias(f32),
+    Horizontal(AnyHorizontalAlignment),
+    Vertical(AnyVerticalAlignment),
+}
+
+impl SpacedAlignment {
+    fn from_horizontal(alignment: AnyHorizontalAlignment) -> SpacedAlignment {
+        match alignment.as_bias() {
+            Some(bias) => SpacedAlignment::Bias(bias.bias),
+            None => SpacedAlignment::Horizontal(alignment),
+        }
+    }
+
+    fn from_vertical(alignment: AnyVerticalAlignment) -> SpacedAlignment {
+        match alignment.as_bias() {
+            Some(bias) => SpacedAlignment::Bias(bias.bias),
+            None => SpacedAlignment::Vertical(alignment),
+        }
+    }
+
+    fn align(&self, free: i32, direction: LayoutDirection) -> i32 {
+        match self {
+            SpacedAlignment::Bias(bias) => {
+                let bias = if direction == LayoutDirection::Rtl { -*bias } else { *bias };
+                compose_ui::platform::round_to_int(free as f32 / 2.0 * (1.0 + bias))
+            }
+            SpacedAlignment::Horizontal(alignment) => alignment.align(0, free, direction),
+            SpacedAlignment::Vertical(alignment) => alignment.align(0, free),
+        }
+    }
+}
+
 /// An arrangement along a main axis: the built-ins as data (compared by value), custom ones by
 /// reference or their `same`.
 #[derive(Clone)]
@@ -75,9 +115,9 @@ pub(crate) enum MainAxisArrangement {
     SpaceEvenly,
     SpaceBetween,
     SpaceAround,
-    /// A fixed space between children, the group placed by a bias when it doesn't fill the
+    /// A fixed space between children, the group placed by an alignment when it doesn't fill the
     /// space (from the start without one), as `spacedBy`; `aligned` is a space of zero.
-    SpacedBy(Dp, Option<f32>),
+    SpacedBy(Dp, Option<SpacedAlignment>),
     Horizontal(Rc<dyn HorizontalArrangementPolicy>),
     Vertical(Rc<dyn VerticalArrangementPolicy>),
     /// One of `Arrangement.Absolute`'s.
@@ -187,47 +227,16 @@ impl MainAxisArrangement {
                 let gap = if count > 0 { free / count as f32 } else { 0.0 };
                 place_from(positions, gap / 2.0, gap)
             }
-            MainAxisArrangement::SpacedBy(space, bias) => {
-                // As Compose's `spacedBy`: each child after the last, kept inside the total, from
-                // the start (in right to left, each before the last from the right end, so what
-                // doesn't fit is at the left, D1928), and the group aligned when it doesn't fill
-                // the total.
-                let space = density.round_to_px(*space);
-                let mut last_space = 0;
-                let mut free;
-                if reverse {
-                    free = total;
-                    for index in 0..count {
-                        let position = (free - sizes[index]).max(0);
-                        positions[index] = position;
-                        last_space = space.min(position);
-                        free = position - last_space;
-                    }
-                    free += last_space;
-                } else {
-                    let mut occupied = 0;
-                    for index in 0..count {
-                        let size = sizes[index];
-                        let position = occupied.min(total - size);
-                        positions[index] = position;
-                        last_space = space.min(total - position - size);
-                        occupied = position + size + last_space;
-                    }
-                    free = total - (occupied - last_space);
-                }
-                if let Some(bias) = *bias
-                    && free > 0
-                {
-                    // `Alignment.align(0, free, direction)`, relative to where the children are
-                    // packed: the start, or the right end in right to left.
-                    let bias = if reverse { -bias } else { bias };
-                    let group =
-                        compose_ui::platform::round_to_int(free as f32 / 2.0 * (1.0 + bias));
-                    let shift = if reverse { group - free } else { group };
-                    for position in positions.iter_mut().take(count) {
-                        *position += shift;
-                    }
-                }
+            MainAxisArrangement::SpacedBy(space, alignment) => {
+                arrange_spaced(
+                    total,
+                    sizes,
+                    density.round_to_px(*space),
+                    reverse,
+                    direction,
+                    alignment.as_ref(),
+                    positions,
+                );
             }
             MainAxisArrangement::Horizontal(policy) => {
                 policy.arrange(density, total, sizes, direction, positions)
@@ -389,10 +398,61 @@ impl Arrangement {
     }
 }
 
+/// Compose's `SpacedAligned.arrange`: packs `sizes` from the right when `reverse` (`rtlMirror &&
+/// Rtl`), else from the left (D1928, D2321), and shifts the group by `alignment` in `direction`
+/// when `free > 0` (D2441).
+fn arrange_spaced(
+    total: i32,
+    sizes: &[i32],
+    space: i32,
+    reverse: bool,
+    direction: LayoutDirection,
+    alignment: Option<&SpacedAlignment>,
+    positions: &mut [i32],
+) {
+    let count = sizes.len();
+    if count == 0 {
+        return;
+    }
+    let mut last_space = 0;
+    let mut free;
+    if reverse {
+        free = total;
+        for index in 0..count {
+            let position = (free - sizes[index]).max(0);
+            positions[index] = position;
+            last_space = space.min(position);
+            free = position - last_space;
+        }
+        free += last_space;
+    } else {
+        let mut occupied = 0;
+        for index in 0..count {
+            let size = sizes[index];
+            let position = occupied.min(total - size);
+            positions[index] = position;
+            last_space = space.min(total - position - size);
+            occupied = position + size + last_space;
+        }
+        free = total - (occupied - last_space);
+    }
+    if let Some(alignment) = alignment
+        && free > 0
+    {
+        let group = alignment.align(free, direction);
+        let shift = if reverse { group - free } else { group };
+        if shift != 0 {
+            for position in positions.iter_mut().take(count) {
+                *position += shift;
+            }
+        }
+    }
+}
+
 /// The arrangements of Compose's `Arrangement.Absolute`, [`AbsoluteArrangement`]'s: a row's
 /// children laid out from the left whatever the layout's direction (a spaced group's
 /// alignment still follows it, as Compose's `SpacedAligned(rtlMirror = false)`).
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub(crate) enum Absolute {
     Left,
     Right,
@@ -400,14 +460,14 @@ pub(crate) enum Absolute {
     SpaceEvenly,
     SpaceBetween,
     SpaceAround,
-    SpacedBy(Dp, Option<f32>),
+    SpacedBy(Dp, Option<SpacedAlignment>),
 }
 
 impl Absolute {
     /// The positions, from the left: the relative arrangement laid out left to right, a spaced
     /// group's alignment taken in `direction`.
     fn arrange(
-        self,
+        &self,
         total: i32,
         sizes: &[i32],
         direction: LayoutDirection,
@@ -421,14 +481,17 @@ impl Absolute {
             Absolute::SpaceEvenly => MainAxisArrangement::SpaceEvenly,
             Absolute::SpaceBetween => MainAxisArrangement::SpaceBetween,
             Absolute::SpaceAround => MainAxisArrangement::SpaceAround,
-            // `alignment.align(0, free, direction)` from the left: the bias mirrored in right to
-            // left, the children packed from the left.
-            Absolute::SpacedBy(space, bias) => {
-                let rtl = direction == LayoutDirection::Rtl;
-                MainAxisArrangement::SpacedBy(
-                    space,
-                    bias.map(|bias| if rtl { -bias } else { bias }),
-                )
+            Absolute::SpacedBy(space, alignment) => {
+                arrange_spaced(
+                    total,
+                    sizes,
+                    density.round_to_px(*space),
+                    false,
+                    direction,
+                    alignment.as_ref(),
+                    positions,
+                );
+                return;
             }
         };
         relative.arrange(total, sizes, LayoutDirection::Ltr, density, positions);
@@ -474,10 +537,10 @@ impl AbsoluteArrangement {
 
     /// Children next to each other from the left, the group aligned by `alignment` in the
     /// layout's direction, as `Arrangement.Absolute.aligned`.
-    pub fn aligned(alignment: HorizontalAlignment) -> HorizontalArrangement {
+    pub fn aligned(alignment: impl Into<AnyHorizontalAlignment>) -> HorizontalArrangement {
         HorizontalArrangement(MainAxisArrangement::Absolute(Absolute::SpacedBy(
             Dp(0.0),
-            Some(alignment.bias),
+            Some(SpacedAlignment::from_horizontal(alignment.into())),
         )))
     }
 }
@@ -502,7 +565,17 @@ impl AbsoluteSpacedBy for (Dp, HorizontalAlignment) {
     fn absolute_arrangement(self) -> HorizontalArrangement {
         HorizontalArrangement(MainAxisArrangement::Absolute(Absolute::SpacedBy(
             self.0,
-            Some(self.1.bias),
+            Some(SpacedAlignment::Bias(self.1.bias)),
+        )))
+    }
+}
+
+impl AbsoluteSpacedBy for (Dp, AnyHorizontalAlignment) {
+    type Arrangement = HorizontalArrangement;
+    fn absolute_arrangement(self) -> HorizontalArrangement {
+        HorizontalArrangement(MainAxisArrangement::Absolute(Absolute::SpacedBy(
+            self.0,
+            Some(SpacedAlignment::from_horizontal(self.1)),
         )))
     }
 }
@@ -512,7 +585,17 @@ impl AbsoluteSpacedBy for (Dp, VerticalAlignment) {
     fn absolute_arrangement(self) -> VerticalArrangement {
         VerticalArrangement(MainAxisArrangement::Absolute(Absolute::SpacedBy(
             self.0,
-            Some(self.1.bias),
+            Some(SpacedAlignment::Bias(self.1.bias)),
+        )))
+    }
+}
+
+impl AbsoluteSpacedBy for (Dp, AnyVerticalAlignment) {
+    type Arrangement = VerticalArrangement;
+    fn absolute_arrangement(self) -> VerticalArrangement {
+        VerticalArrangement(MainAxisArrangement::Absolute(Absolute::SpacedBy(
+            self.0,
+            Some(SpacedAlignment::from_vertical(self.1)),
         )))
     }
 }
@@ -533,14 +616,41 @@ impl SpacedBy for Dp {
 impl SpacedBy for (Dp, HorizontalAlignment) {
     type Arrangement = HorizontalArrangement;
     fn arrangement(self) -> HorizontalArrangement {
-        HorizontalArrangement(MainAxisArrangement::SpacedBy(self.0, Some(self.1.bias)))
+        HorizontalArrangement(MainAxisArrangement::SpacedBy(
+            self.0,
+            Some(SpacedAlignment::Bias(self.1.bias)),
+        ))
+    }
+}
+
+impl SpacedBy for (Dp, AnyHorizontalAlignment) {
+    type Arrangement = HorizontalArrangement;
+    fn arrangement(self) -> HorizontalArrangement {
+        HorizontalArrangement(MainAxisArrangement::SpacedBy(
+            self.0,
+            Some(SpacedAlignment::from_horizontal(self.1)),
+        ))
     }
 }
 
 impl SpacedBy for (Dp, VerticalAlignment) {
     type Arrangement = VerticalArrangement;
     fn arrangement(self) -> VerticalArrangement {
-        VerticalArrangement(MainAxisArrangement::SpacedBy(self.0, Some(self.1.bias)))
+        VerticalArrangement(MainAxisArrangement::SpacedBy(
+            self.0,
+            Some(SpacedAlignment::Bias(self.1.bias)),
+        ))
+    }
+}
+
+impl SpacedBy for (Dp, AnyVerticalAlignment) {
+    type Arrangement = VerticalArrangement;
+    fn arrangement(self) -> VerticalArrangement {
+        HorizontalOrVerticalArrangement(MainAxisArrangement::SpacedBy(
+            self.0,
+            Some(SpacedAlignment::from_vertical(self.1)),
+        ))
+        .into()
     }
 }
 
@@ -553,14 +663,40 @@ pub trait AlignedBy {
 impl AlignedBy for HorizontalAlignment {
     type Arrangement = HorizontalArrangement;
     fn arrangement(self) -> HorizontalArrangement {
-        HorizontalArrangement(MainAxisArrangement::SpacedBy(Dp(0.0), Some(self.bias)))
+        HorizontalArrangement(MainAxisArrangement::SpacedBy(
+            Dp(0.0),
+            Some(SpacedAlignment::Bias(self.bias)),
+        ))
+    }
+}
+
+impl AlignedBy for AnyHorizontalAlignment {
+    type Arrangement = HorizontalArrangement;
+    fn arrangement(self) -> HorizontalArrangement {
+        HorizontalArrangement(MainAxisArrangement::SpacedBy(
+            Dp(0.0),
+            Some(SpacedAlignment::from_horizontal(self)),
+        ))
     }
 }
 
 impl AlignedBy for VerticalAlignment {
     type Arrangement = VerticalArrangement;
     fn arrangement(self) -> VerticalArrangement {
-        VerticalArrangement(MainAxisArrangement::SpacedBy(Dp(0.0), Some(self.bias)))
+        VerticalArrangement(MainAxisArrangement::SpacedBy(
+            Dp(0.0),
+            Some(SpacedAlignment::Bias(self.bias)),
+        ))
+    }
+}
+
+impl AlignedBy for AnyVerticalAlignment {
+    type Arrangement = VerticalArrangement;
+    fn arrangement(self) -> VerticalArrangement {
+        VerticalArrangement(MainAxisArrangement::SpacedBy(
+            Dp(0.0),
+            Some(SpacedAlignment::from_vertical(self)),
+        ))
     }
 }
 

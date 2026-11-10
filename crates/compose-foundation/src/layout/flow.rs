@@ -469,9 +469,8 @@ impl FlowMeasurePolicy {
         }
         let main = ((fixed as i64 + weighted_space).max(0) as i32).max(main_min);
         // Those aligned by a line, what's before and after the line they share, as a row's.
-        let any_align_by = range
-            .clone()
-            .any(|index| super::is_align_by(scope.parent_data(measurables[index]).alignment));
+        let any_align_by =
+            range.clone().any(|index| super::has_align_by(scope, measurables[index]));
         let (mut before_line, mut after_line) = (0, 0);
         if any_align_by {
             for index in range.clone() {

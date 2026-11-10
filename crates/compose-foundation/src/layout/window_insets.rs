@@ -426,7 +426,10 @@ impl fmt::Display for WindowInsets {
             Inner::Padding(padding) => write!(
                 formatter,
                 "PaddingValues({:?}, {:?}, {:?}, {:?})",
-                padding.start, padding.top, padding.end, padding.bottom
+                padding.calculate_left_padding(LayoutDirection::Ltr),
+                padding.top,
+                padding.calculate_right_padding(LayoutDirection::Ltr),
+                padding.bottom
             ),
             Inner::Mutable(mutable) => {
                 write!(formatter, "MutableWindowInsets({})", mutable.insets())

@@ -104,7 +104,6 @@ fn perform_scroll_to_key_supports_opaque_keys_string_interop_grids_staggered_and
 }
 
 #[test]
-#[ignore = "review: format_key(&dyn Any) calls type_name_of_val on dyn Any, printing 'dyn core::any::Any' instead of K's type name"]
 fn perform_scroll_to_key_missing_opaque_key_names_concrete_key_type() {
     let mut ui = rule(|| {
         LazyColumn!(

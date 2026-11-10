@@ -1471,8 +1471,9 @@ impl MeasurePolicy for TopAppBarLayout {
         let navigation = scope.measure(*navigation, loose);
         let actions = scope.measure(*actions, loose);
         let padding = self.content_padding;
-        let start_padding = density.round_to_px(padding.start);
-        let end_padding = density.round_to_px(padding.end);
+        let direction = scope.layout_direction();
+        let start_padding = density.round_to_px(padding.calculate_start_padding(direction));
+        let end_padding = density.round_to_px(padding.calculate_end_padding(direction));
         let title_start = density.round_to_px(TITLE_INSET).max(navigation.width);
         let width = constraints.max_width;
         let max_title_width = if width == Constraints::INFINITY {

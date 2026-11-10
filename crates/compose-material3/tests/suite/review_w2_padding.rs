@@ -12,7 +12,6 @@ use compose_ui::platform::Optimizations;
 use compose_ui::{IntSize, LOCAL_LAYOUT_DIRECTION, LayoutDirection, Modifier, UnitExt};
 
 #[test]
-#[ignore = "review: TopAppBar, ListItem, SplitButton, and OutlinedTextField read PaddingValues.start/end directly instead of resolving absolute sides"]
 fn material3_components_resolve_absolute_content_padding_in_ltr_and_rtl() {
     compose_test::use_optimizations(Optimizations::NONE);
 

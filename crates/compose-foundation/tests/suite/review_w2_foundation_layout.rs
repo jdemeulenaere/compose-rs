@@ -79,7 +79,6 @@ fn captured_scopes() -> (RowScope, ColumnScope) {
 // ---- PaddingValues::absolute, Modifier::absolute_padding, negative & UNSPECIFIED ---------------
 
 #[test]
-#[ignore = "review: Modifier::absolute_padding panics on Dp::UNSPECIFIED and struct PaddingValues with Dp::UNSPECIFIED breaks Modifier::same and poisons absolute+relative sums"]
 fn absolute_padding_and_struct_padding_accept_unspecified_sides_and_preserve_equality() {
     let abs = Modifier.absolute_padding(Dp::UNSPECIFIED, 6.dp(), Dp::UNSPECIFIED, 10.dp());
     assert!(abs.same(&Modifier.absolute_padding(
@@ -113,34 +112,37 @@ fn absolute_padding_and_struct_padding_accept_unspecified_sides_and_preserve_equ
 
     let measures = Rc::new(Cell::new(0usize));
     let m = measures.clone();
+    let counting = Modifier.layout(move |scope, measurable, constraints| {
+        m.set(m.get() + 1);
+        let placeable = scope.measure(measurable, constraints);
+        scope.place(&placeable, 0, 0);
+        scope.layout(placeable.width, placeable.height)
+    });
     let consumed_display = Rc::new(RefCell::new(String::new()));
     let cd = consumed_display.clone();
     let tick = mutable_state_of(0);
     let handle = tick.handle();
     let p = PlacedProbe::new();
+    let probe0 = p.record(0);
     let p_in = p.clone();
     let mut ui = rule_sized(200, 200, move || {
         let _ = handle.get();
-        let m = m.clone();
+        let counting = counting.clone();
+        let probe0 = probe0.clone();
         let p = p_in.clone();
         let cd = cd.clone();
         with_direction!(LayoutDirection::Rtl, move || {
-            let m = m.clone();
+            let counting = counting.clone();
+            let probe0 = probe0.clone();
             let p1 = p.clone();
             let cd = cd.clone();
             Box!(
                 modifier = Modifier
                     .absolute_padding(Dp::UNSPECIFIED, 6.dp(), 8.dp(), Dp::UNSPECIFIED)
-                    .then(p.record(0)),
+                    .then(counting)
+                    .then(probe0),
                 {
-                    let m = m.clone();
-                    Layout!(
-                        measure_policy = measure_policy(move |scope, _, _| {
-                            m.set(m.get() + 1);
-                            scope.layout(20, 30)
-                        }),
-                        {}
-                    );
+                    Box!(modifier = Modifier.size((20.dp(), 30.dp())));
                 }
             );
             Box!(
@@ -173,7 +175,7 @@ fn absolute_padding_and_struct_padding_accept_unspecified_sides_and_preserve_equ
     assert_eq!(p.pos(1), IntOffset::new(0, 0));
     assert_eq!(
         consumed_display.borrow().as_str(),
-        "(Insets(left=0, top=0, right=0, bottom=0) + PaddingValues(13.0.dp, 5.0.dp, 29.0.dp, 8.0.dp))"
+        "(Insets(left=0, top=0, right=0, bottom=0) + PaddingValues(13.dp, 5.dp, 29.dp, 8.dp))"
     );
 
     // Recomposition with identical Dp::UNSPECIFIED modifiers must not remeasure.
@@ -440,7 +442,118 @@ fn non_restartable_row_column_and_flow_skip_unchanged_content_and_reuse_cleanly(
 // ---- Custom alignment modifier chaining & cross-axis directions --------------------------------
 
 #[test]
-#[ignore = "review: custom align and align_by / align_by_block ignore outermost-wins chaining order"]
+fn spaced_by_and_aligned_arrangements_accept_custom_alignments_in_ltr_and_rtl() {
+    let custom_h = HorizontalAlignment::custom(|size, space, dir| {
+        assert_eq!(size, 0);
+        if dir == LayoutDirection::Ltr { 13 } else { space - 19 }
+    });
+    let custom_v = VerticalAlignment::custom(|size, space| {
+        assert_eq!(size, 0);
+        space - 7
+    });
+
+    for direction in [LayoutDirection::Ltr, LayoutDirection::Rtl] {
+        let ch1 = custom_h.clone();
+        let ch2 = custom_h.clone();
+        let ch3 = custom_h.clone();
+        let ch4 = custom_h.clone();
+        let cv1 = custom_v.clone();
+        let cv2 = custom_v.clone();
+        let p = PlacedProbe::new();
+        let p_in = p.clone();
+        let _ui = rule_sized(200, 200, move || {
+            let p = p_in.clone();
+            let ch1 = ch1.clone();
+            let ch2 = ch2.clone();
+            let ch3 = ch3.clone();
+            let ch4 = ch4.clone();
+            let cv1 = cv1.clone();
+            let cv2 = cv2.clone();
+            with_direction!(direction, move || {
+                let p0 = p.clone();
+                let p1 = p.clone();
+                let p2 = p.clone();
+                let p3 = p.clone();
+                let p4 = p.clone();
+                let p5 = p.clone();
+                Row!(
+                    modifier = Modifier.required_size((100.dp(), 20.dp())),
+                    horizontal_arrangement = Arrangement::spaced_by((5.dp(), ch1.clone())),
+                    move |_| {
+                        Box!(modifier = Modifier.size((20.dp(), 10.dp())).then(p0.record(0)));
+                        Box!(modifier = Modifier.size((15.dp(), 10.dp())).then(p0.record(1)));
+                    }
+                );
+                Row!(
+                    modifier = Modifier.required_size((100.dp(), 20.dp())),
+                    horizontal_arrangement = Arrangement::aligned(ch2.clone()),
+                    move |_| {
+                        Box!(modifier = Modifier.size((20.dp(), 10.dp())).then(p1.record(2)));
+                        Box!(modifier = Modifier.size((15.dp(), 10.dp())).then(p1.record(3)));
+                    }
+                );
+                Row!(
+                    modifier = Modifier.required_size((100.dp(), 20.dp())),
+                    horizontal_arrangement = AbsoluteArrangement::spaced_by((5.dp(), ch3.clone())),
+                    move |_| {
+                        Box!(modifier = Modifier.size((20.dp(), 10.dp())).then(p2.record(4)));
+                        Box!(modifier = Modifier.size((15.dp(), 10.dp())).then(p2.record(5)));
+                    }
+                );
+                Row!(
+                    modifier = Modifier.required_size((100.dp(), 20.dp())),
+                    horizontal_arrangement = AbsoluteArrangement::aligned(ch4.clone()),
+                    move |_| {
+                        Box!(modifier = Modifier.size((20.dp(), 10.dp())).then(p3.record(6)));
+                        Box!(modifier = Modifier.size((15.dp(), 10.dp())).then(p3.record(7)));
+                    }
+                );
+                Column!(
+                    modifier = Modifier.required_size((20.dp(), 100.dp())),
+                    vertical_arrangement = Arrangement::spaced_by((5.dp(), cv1.clone())),
+                    move |_| {
+                        Box!(modifier = Modifier.size((10.dp(), 20.dp())).then(p4.record(8)));
+                        Box!(modifier = Modifier.size((10.dp(), 15.dp())).then(p4.record(9)));
+                    }
+                );
+                Column!(
+                    modifier = Modifier.required_size((20.dp(), 100.dp())),
+                    vertical_arrangement = Arrangement::aligned(cv2.clone()),
+                    move |_| {
+                        Box!(modifier = Modifier.size((10.dp(), 20.dp())).then(p5.record(10)));
+                        Box!(modifier = Modifier.size((10.dp(), 15.dp())).then(p5.record(11)));
+                    }
+                );
+            });
+        });
+
+        // Relative spaced_by(5, custom_h): occupied = 40, free = 60.
+        // LTR: packed at [0, 25], group=13 -> [13, 38].
+        // RTL: packed at [80, 60], group = 60 - 19 = 41, shift = 41 - 60 = -19 -> [61, 41].
+        // Relative aligned(custom_h): occupied = 35, free = 65.
+        // LTR: packed at [0, 20], group=13 -> [13, 33].
+        // RTL: packed at [80, 65], group = 65 - 19 = 46, shift = -19 -> [61, 46].
+        // Absolute spaced_by(5, custom_h): packed at [0, 25] in both directions;
+        // LTR group=13 -> [13, 38]; RTL group = 60 - 19 = 41 -> [41, 66].
+        // Absolute aligned(custom_h): packed at [0, 20]; LTR -> [13, 33]; RTL group = 65 - 19 = 46 -> [46, 66].
+        if direction == LayoutDirection::Ltr {
+            assert_eq!((p.pos(0).x, p.pos(1).x), (13, 38));
+            assert_eq!((p.pos(2).x, p.pos(3).x), (13, 33));
+            assert_eq!((p.pos(4).x, p.pos(5).x), (13, 38));
+            assert_eq!((p.pos(6).x, p.pos(7).x), (13, 33));
+        } else {
+            assert_eq!((p.pos(0).x, p.pos(1).x), (61, 41));
+            assert_eq!((p.pos(2).x, p.pos(3).x), (61, 46));
+            assert_eq!((p.pos(4).x, p.pos(5).x), (41, 66));
+            assert_eq!((p.pos(6).x, p.pos(7).x), (46, 66));
+        }
+        // Column vertical_arrangement: free = 60 -> group = 53 -> [53, 78]; aligned free = 65 -> 58 -> [58, 78].
+        assert_eq!((p.pos(8).y, p.pos(9).y), (53, 78));
+        assert_eq!((p.pos(10).y, p.pos(11).y), (58, 78));
+    }
+}
+
+#[test]
 fn custom_alignment_chaining_with_align_and_align_by_in_row_column_and_flow() {
     let (row_scope, col_scope) = captured_scopes();
     let h_line = HorizontalAlignmentLine::new(|a, b| a.min(b));
@@ -566,8 +679,9 @@ fn custom_alignment_chaining_with_align_and_align_by_in_row_column_and_flow() {
     assert_eq!(p.pos(5).y, 80);
     assert_eq!(p.pos(6).y, 29);
     assert_eq!(seen_row_dir.get(), Some(LayoutDirection::Ltr));
-    assert_eq!(p.pos(7).x, 19);
-    assert_eq!(p.pos(8).x, 33);
+    // In RTL, the 20-wide column is placed at x = 100 - 20 = 80; item cross offsets 19 and 33 add to 80.
+    assert_eq!(p.pos(7).x, 99);
+    assert_eq!(p.pos(8).x, 113);
 }
 
 // ---- Background semantics invalidation, bounds, brush alpha, and reuse ------------------------

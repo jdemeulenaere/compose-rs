@@ -18,14 +18,14 @@ The log is split by area into the files below, one table each, rows in number or
 | File | Covers | Rows |
 |---|---|---|
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 186 |
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 479 |
+| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 482 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 159 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 124 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 34 |
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 31 |
 | [desktop](decisions/desktop.md) | The desktop host: window, Skia rendering, input and events. | 6 |
 | [benchmarks](decisions/benchmarks.md) | The benchmark apps, protocols and rounds, and how results are read. | 35 |
-| [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 85 |
+| [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 86 |
 
 ## Index by number
 
@@ -1162,11 +1162,15 @@ The log is split by area into the files below, one table each, rows in number or
 | D2200 | [runtime](decisions/runtime.md#d2200) | current |
 | D2201 | [runtime](decisions/runtime.md#d2201) | current |
 | D2210 | [text](decisions/text.md#d2210) | current |
-| D2320 | [ui-and-layout](decisions/ui-and-layout.md#d2320) | current |
-| D2321 | [ui-and-layout](decisions/ui-and-layout.md#d2321) | current |
-| D2322 | [ui-and-layout](decisions/ui-and-layout.md#d2322) | current |
-| D2323 | [ui-and-layout](decisions/ui-and-layout.md#d2323) | current |
+| D2320 | [ui-and-layout](decisions/ui-and-layout.md#d2320) | revised by [D2440](decisions/ui-and-layout.md#d2440) |
+| D2321 | [ui-and-layout](decisions/ui-and-layout.md#d2321) | revised by [D2441](decisions/ui-and-layout.md#d2441) |
+| D2322 | [ui-and-layout](decisions/ui-and-layout.md#d2322) | revised by [D2441](decisions/ui-and-layout.md#d2441) |
+| D2323 | [ui-and-layout](decisions/ui-and-layout.md#d2323) | revised by [D2442](decisions/ui-and-layout.md#d2442) |
 | D2324 | [ui-and-layout](decisions/ui-and-layout.md#d2324) | current |
 | D2335 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d2335) | current |
 | D2336 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d2336) | current |
-| D2337 | [api-and-tooling](decisions/api-and-tooling.md#d2337) | current |
+| D2337 | [api-and-tooling](decisions/api-and-tooling.md#d2337) | revised by [D2443](decisions/api-and-tooling.md#d2443) |
+| D2440 | [ui-and-layout](decisions/ui-and-layout.md#d2440) | current |
+| D2441 | [ui-and-layout](decisions/ui-and-layout.md#d2441) | current |
+| D2442 | [ui-and-layout](decisions/ui-and-layout.md#d2442) | current |
+| D2443 | [api-and-tooling](decisions/api-and-tooling.md#d2443) | current |

@@ -454,7 +454,7 @@ impl LayoutModifierNode for FillNode {
 // ---- Drawing ---------------------------------------------------------------------------------
 
 /// `background`'s node for a color, as Compose's `BackgroundNode`: it draws, and its semantics
-/// say its shape and color, without being its node's bounds (D2325).
+/// say its shape and color, without being its node's bounds (D2324).
 pub(crate) struct BackgroundNode {
     color: Color,
     shape: Shape,
@@ -484,7 +484,7 @@ struct BackgroundColorState {
 
 /// What a background's semantics keep: whether its shape changed since its last update was
 /// invalidated, and the color its `BackgroundColor` producer reads, allocated once when first
-/// asked (D2325). Keeping the `ColorProducer` across color-only updates keeps `PartialEq` equal
+/// asked (D2324). Keeping the `ColorProducer` across color-only updates keeps `PartialEq` equal
 /// in `check_semantics_cache` while its returned color updates in place, matching Compose's
 /// `BackgroundElement.update` (which invalidates semantics only when the shape changes).
 #[derive(Default)]

@@ -118,7 +118,6 @@ fn visible_false_child_is_not_clickable() {
 
 // Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/VisibleTest.kt, visible_false_isNotFocusable
 #[test]
-#[ignore = "unplaced content: unplaced node stays placed (w2-layout-scheduler) and leaves semantics_tree (bounds.rs)"]
 fn visible_false_is_not_focusable() {
     let requester = FocusRequester::new();
     let mut ui = rule(move || {
@@ -139,7 +138,6 @@ fn visible_false_is_not_focusable() {
 
 // Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/VisibleTest.kt, visible_toggle_losesFocus
 #[test]
-#[ignore = "unplaced content: unplaced node stays placed (w2-layout-scheduler) and leaves semantics_tree (bounds.rs)"]
 fn visible_toggle_loses_focus() {
     let is_visible = mutable_state_of(true);
     let current = is_visible.handle();

@@ -258,7 +258,7 @@ impl MeasurePolicy for RowColumnMeasurePolicy {
         let mut any_align_by = false;
         for (index, &measurable) in measurables.iter().enumerate() {
             let data = scope.parent_data(measurable);
-            any_align_by |= is_align_by(data.alignment);
+            any_align_by |= has_align_by(scope, measurable);
             if let Some((weight, _)) = data.weight {
                 total_weight += weight;
                 weighted += 1;
@@ -471,17 +471,24 @@ impl RowColumnMeasurePolicy {
     }
 }
 
-/// Whether it's aligned by a line, as Compose's `isRelative`.
-fn is_align_by(alignment: Option<ParentAlignment>) -> bool {
-    matches!(alignment, Some(ParentAlignment::Line(_) | ParentAlignment::Block(_)))
+/// Whether it's aligned by a line (and not overridden by an outer custom alignment), as
+/// Compose's `isRelative`.
+pub(crate) fn has_align_by(scope: &MeasureScope<'_>, measurable: Measurable) -> bool {
+    matches!(
+        scope.parent_data(measurable).alignment,
+        Some(ParentAlignment::Line(_) | ParentAlignment::Block(_))
+    ) && scope.custom_alignment(measurable).is_none()
 }
 
-/// Where its line is, if it's aligned by one.
+/// Where its line is, if it's aligned by one (and not overridden by an outer custom alignment).
 fn line_position(
     scope: &mut MeasureScope<'_>,
     measurable: Measurable,
     placeable: &Placeable,
 ) -> Option<i32> {
+    if scope.custom_alignment(measurable).is_some() {
+        return None;
+    }
     match scope.parent_data(measurable).alignment {
         Some(ParentAlignment::Line(line)) => Some(scope.alignment_line(placeable, line)),
         Some(ParentAlignment::Block(_)) => {

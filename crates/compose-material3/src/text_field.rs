@@ -1578,8 +1578,11 @@ fn decoration_box(parts: DecorationParts, inner_text_field: Callback) {
     let beside = |padding: Dp, icon: bool| {
         if icon { Dp((padding.0 - icon_padding.0).max(0.0)) } else { padding }
     };
-    let start_padding = beside(content_padding.start, slots.leading_icon.is_some());
-    let end_padding = beside(content_padding.end, slots.trailing_icon.is_some());
+    let direction = compose_ui::LOCAL_LAYOUT_DIRECTION.current();
+    let start_padding =
+        beside(content_padding.calculate_start_padding(direction), slots.leading_icon.is_some());
+    let end_padding =
+        beside(content_padding.calculate_end_padding(direction), slots.trailing_icon.is_some());
     let label_min_height = compose_runtime::remember_keyed(progress.is_some(), move || {
         // As `textFieldLabelMinHeight`, the lerp read while measuring: no composition for a frame.
         Modifier.layout(move |scope, measurable, constraints| {
@@ -1987,10 +1990,8 @@ fn DecorationContainer(parts: ContainerParts, container: Option<Callback>) {
             return None;
         }
         let inner = density.to_px(4.dp());
-        let ltr = direction == compose_ui::LayoutDirection::Ltr;
-        let (start, end) =
-            (density.to_px(content_padding.start), density.to_px(content_padding.end));
-        let (left, right) = if ltr { (start, end) } else { (end, start) };
+        let left = density.to_px(content_padding.calculate_left_padding(direction));
+        let right = density.to_px(content_padding.calculate_right_padding(direction));
         let x = notch_alignment.align(
             width.round() as i32,
             (size.width - left - right).round() as i32,
@@ -2277,8 +2278,9 @@ impl DecorationLayout {
         let progress = self.progress();
         let middle = (text + affixes).max(placeholder + affixes).max(lerp_int(label, 0, progress));
         let wrapped = leading + middle + trailing;
-        let padding =
-            density.to_px(self.content_padding.start) + density.to_px(self.content_padding.end);
+        let ltr = compose_ui::LayoutDirection::Ltr;
+        let padding = density.to_px(self.content_padding.calculate_left_padding(ltr))
+            + density.to_px(self.content_padding.calculate_right_padding(ltr));
         wrapped.max(round_half_up((label as f32 + padding) * progress))
     }
 
@@ -2613,7 +2615,9 @@ impl DecorationLayout {
         let top_px = density.round_to_px(padding.top);
         let loose = constraints.loosen();
         let beside = self.beside(scope, &slots, loose);
-        let horizontal = density.round_to_px(padding.start) + density.round_to_px(padding.end);
+        let direction = scope.layout_direction();
+        let horizontal = density.round_to_px(padding.calculate_left_padding(direction))
+            + density.round_to_px(padding.calculate_right_padding(direction));
         let label_offset = lerp_int(beside.occupied + horizontal, horizontal, progress);
         let label =
             slots.label.map(|slot| scope.measure(slot, loose.offset(-label_offset, -bottom)));
@@ -2686,9 +2690,11 @@ impl DecorationLayout {
         if let Some(label) = &label {
             let start_y = if self.single_line { centered(label.height, height) } else { top };
             let y = lerp_int(start_y, -(label.height / 2), progress);
-            let direction = scope.layout_direction();
             let ltr = direction == compose_ui::LayoutDirection::Ltr;
-            let (start, end) = (padding.start.0 * density.density, padding.end.0 * density.density);
+            let (start, end) = (
+                padding.calculate_start_padding(direction).0 * density.density,
+                padding.calculate_end_padding(direction).0 * density.density,
+            );
             let icon = self.icon_padding.0 * density.density;
             let leading_plus = match &beside.leading {
                 None => start,

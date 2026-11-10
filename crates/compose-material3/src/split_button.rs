@@ -393,10 +393,14 @@ fn center_optically(modifier: Modifier, shape: Shape, padding: PaddingValues) ->
     modifier.layout(move |scope, measurable, constraints| {
         let placeable = scope.measure(measurable, constraints);
         let density = scope.density();
+        let direction = scope.layout_direction();
         let size = Size::new(placeable.width as f32, placeable.height as f32);
         let offset = crate::animated_shape::optical_center_offset(&shape, size, &density)
             .unwrap_or(0.0)
-            .clamp(-density.to_px(padding.start), density.to_px(padding.end));
+            .clamp(
+                -density.to_px(padding.calculate_start_padding(direction)),
+                density.to_px(padding.calculate_end_padding(direction)),
+            );
         scope.place_relative(&placeable, offset.round() as i32, 0);
         scope.layout(placeable.width, placeable.height)
     })

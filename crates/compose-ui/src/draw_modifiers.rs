@@ -210,7 +210,7 @@ pub(crate) struct BackgroundBrushElement {
 
 /// `background`'s node for a gradient brush, as Compose's `BackgroundNode`: its semantics say its
 /// shape, and an unspecified color (a gradient has none), without being its node's bounds
-/// (D2325).
+/// (D2324).
 pub(crate) struct BackgroundBrushNode {
     brush: crate::brush::Brush,
     shape: crate::graphics::Shape,

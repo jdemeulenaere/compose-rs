@@ -373,7 +373,8 @@ impl IntrinsicMeasureScope<'_> {
         if node.parent_data.alignment.is_some() {
             for element in node.modifier.elements() {
                 match element {
-                    crate::modifier::Element::Align(_) => return None,
+                    crate::modifier::Element::Align(_)
+                    | crate::modifier::Element::AlignBlock(_) => return None,
                     crate::modifier::Element::Custom(custom_element)
                         if custom_element
                             .downcast_ref::<crate::modifier::CustomAlignElement>()

@@ -1182,7 +1182,7 @@ impl UiTree {
     }
 
     /// Whether `node` and its ancestors are placed: laid out where the root shows it.
-    pub(crate) fn is_placed_in_root(&self, node: NodeId) -> bool {
+    pub fn is_placed_in_root(&self, node: NodeId) -> bool {
         let mut current = Some(node);
         while let Some(id) = current {
             let value = self.node(id);

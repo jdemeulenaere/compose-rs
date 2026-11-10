@@ -77,14 +77,24 @@ impl Modifier {
     fn padding_of(self, padding: PaddingValues) -> Modifier {
         let PaddingValues { start, top, end, bottom, left, right } = padding;
         check_padding([start, top, end, bottom, left, right], true);
-        self.then_element(Element::Padding(padding))
+        let finite_or_zero = |dp: Dp| if dp.0.is_nan() { Dp(0.0) } else { dp };
+        self.then_element(Element::Padding(PaddingValues {
+            start: finite_or_zero(start),
+            top: finite_or_zero(top),
+            end: finite_or_zero(end),
+            bottom: finite_or_zero(bottom),
+            left: finite_or_zero(left),
+            right: finite_or_zero(right),
+        }))
     }
 
     /// Space around the content on the left, top, right and bottom whatever the layout's
-    /// direction, as `Modifier.absolutePadding`. Panics if a side is negative, as Compose's.
+    /// direction, as `Modifier.absolutePadding`. Panics if a side is negative, as Compose's
+    /// (`Dp::UNSPECIFIED` is none).
     #[track_caller]
     pub fn absolute_padding(self, left: Dp, top: Dp, right: Dp, bottom: Dp) -> Modifier {
-        self.padding_of(PaddingValues::absolute(left, top, right, bottom))
+        let zero = Dp(0.0);
+        self.padding_of(PaddingValues { start: zero, top, end: zero, bottom, left, right })
     }
 
     /// Shows or hides the content while keeping the space it measured, as `Modifier.visible`:
@@ -1624,7 +1634,7 @@ pub trait ModifierNode: Any {
     /// What an update of the node by its element invalidates of its kinds: all of them, or none
     /// if `should_auto_invalidate` says not to. compose-rs's, for a built-in node that
     /// invalidates part of what it is only when its update changed that (a background's
-    /// semantics when its shape changed, as Compose's `BackgroundElement.update`, D2325).
+    /// semantics when its shape changed, as Compose's `BackgroundElement.update`, D2324).
     #[doc(hidden)]
     fn auto_invalidated_kinds(&mut self) -> crate::node_chain::NodeKinds {
         if self.should_auto_invalidate() {

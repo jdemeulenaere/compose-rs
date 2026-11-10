@@ -378,8 +378,8 @@ impl<'a> SemanticsNodeInteraction<'a> {
     /// `performScrollToKey`: resolves the key through `IndexForKey` and invokes `ScrollToIndex`.
     #[track_caller]
     pub fn perform_scroll_to_key<K: 'static>(&mut self, key: K) -> &mut Self {
-        let key_label = format_key(&key);
         let node = self.find().unwrap_or_else(|message| {
+            let key_label = format_key(&key);
             panic!("compose-test: Failed: performScrollToKey(\"{key_label}\")\n{message}")
         });
         let index_for_key = node.config.get(&SemanticsProperties::INDEX_FOR_KEY);
@@ -392,6 +392,7 @@ impl<'a> SemanticsNodeInteraction<'a> {
             if scroll_to_index.is_none() {
                 missing.push(SemanticsActions::SCROLL_TO_INDEX.name());
             }
+            let key_label = format_key(&key);
             panic!(
                 "compose-test: Failed to scroll to the item identified by \"{key_label}\", the \
                  node is missing [{}]: {:?}",
@@ -404,8 +405,9 @@ impl<'a> SemanticsNodeInteraction<'a> {
         let index = (index_for_key.0)(&key);
         assert!(
             index >= 0,
-            "compose-test: Failed to scroll to the item identified by \"{key_label}\", couldn't \
-             find the key."
+            "compose-test: Failed to scroll to the item identified by \"{}\", couldn't find the \
+             key.",
+            format_key(&key)
         );
         if let Some(action) = scroll_to_index.action.clone() {
             action(index);
@@ -682,6 +684,12 @@ impl<'a> SemanticsNodeInteraction<'a> {
         let clipped = if is_root {
             window
         } else {
+            // As Compose's `checkIsDisplayed`: a node whose layout (or an ancestor's) is not
+            // placed is not displayed, even when its semantics modifier sits on a placed outer
+            // layer (such as `VisibilityNode` before its unplaced inner layer, D2442).
+            if !self.rule.host.with_tree(|tree| tree.is_placed_in_root(id)) {
+                return false;
+            }
             match self.rule.host.with_tree(|tree| tree.semantics_bounds_in_root(id)) {
                 Some((_, clipped)) => clipped,
                 None => return false,
@@ -909,48 +917,52 @@ impl<'a> SemanticsNodeInteractionCollection<'a> {
     }
 }
 
-fn format_key(key: &dyn std::any::Any) -> String {
+fn format_key<K: 'static>(key: &K) -> String {
+    format_key_any(key).unwrap_or_else(|| std::any::type_name::<K>().to_string())
+}
+
+fn format_key_any(key: &dyn std::any::Any) -> Option<String> {
     if let Some(s) = key.downcast_ref::<String>() {
-        return s.clone();
+        return Some(s.clone());
     }
     if let Some(s) = key.downcast_ref::<&'static str>() {
-        return (*s).to_string();
+        return Some((*s).to_string());
     }
     if let Some(v) = key.downcast_ref::<i32>() {
-        return v.to_string();
+        return Some(v.to_string());
     }
     if let Some(v) = key.downcast_ref::<usize>() {
-        return v.to_string();
+        return Some(v.to_string());
     }
     if let Some(v) = key.downcast_ref::<i64>() {
-        return v.to_string();
+        return Some(v.to_string());
     }
     if let Some(v) = key.downcast_ref::<u64>() {
-        return v.to_string();
+        return Some(v.to_string());
     }
     if let Some(v) = key.downcast_ref::<u32>() {
-        return v.to_string();
+        return Some(v.to_string());
     }
     if let Some(v) = key.downcast_ref::<isize>() {
-        return v.to_string();
+        return Some(v.to_string());
     }
     if let Some(v) = key.downcast_ref::<i16>() {
-        return v.to_string();
+        return Some(v.to_string());
     }
     if let Some(v) = key.downcast_ref::<u16>() {
-        return v.to_string();
+        return Some(v.to_string());
     }
     if let Some(v) = key.downcast_ref::<i8>() {
-        return v.to_string();
+        return Some(v.to_string());
     }
     if let Some(v) = key.downcast_ref::<u8>() {
-        return v.to_string();
+        return Some(v.to_string());
     }
     if let Some(v) = key.downcast_ref::<bool>() {
-        return v.to_string();
+        return Some(v.to_string());
     }
     if let Some(v) = key.downcast_ref::<char>() {
-        return v.to_string();
+        return Some(v.to_string());
     }
-    std::any::type_name_of_val(key).to_string()
+    None
 }
