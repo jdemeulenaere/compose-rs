@@ -208,16 +208,17 @@ fn toggle_placement_in_modifier_and_verify_lookahead_root_placement() {
     });
     ui.wait_for_idle();
     assert_eq!(both(&placed), [true, true]);
-    let is_placed = |ui: &mut ComposeTestRule| {
-        ui.on_node_with_tag("item").fetch_semantics_node().layout_info().is_placed()
-    };
-    assert!(is_placed(&mut ui));
+    let info = ui.on_node_with_tag("item").fetch_semantics_node().layout_info();
+    assert!(info.is_placed());
+    reset(&placed);
     place.set(false);
     ui.wait_for_idle();
-    assert!(!is_placed(&mut ui));
+    assert!(!info.is_placed());
+    assert_eq!(both(&placed), [false, false]);
     reset(&placed);
     place.set(true);
     ui.wait_for_idle();
+    assert!(info.is_placed());
     assert_eq!(both(&placed), [true, true]);
 }
 

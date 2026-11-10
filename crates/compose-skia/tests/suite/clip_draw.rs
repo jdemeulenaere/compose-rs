@@ -196,17 +196,30 @@ fn assert_inverted_triangle(image: &CapturedImage, inner: Color, outer: Color) {
     image.assert_pixel_color(inner, center, last - 6);
 }
 
-/// Green around a corner of 12 at each of the four corners.
+/// Green around a corner of 12 at each of the four corners (Compose checks three; the fourth,
+/// (27, 27), is green as well).
 #[track_caller]
 fn assert_green_corners(image: &CapturedImage) {
     image.assert_pixel_color(Color::GREEN, 2, 2);
     image.assert_pixel_color(Color::GREEN, 2, 27);
     image.assert_pixel_color(Color::GREEN, 27, 2);
+    image.assert_pixel_color(Color::GREEN, 27, 27);
 }
 
 /// Green filling the 30 × 30 layout, clipped to `clip`, then cyan.
 fn clipped(clip: Shape) -> Modifier {
     fill_color(fill_color(Modifier, Color::GREEN).clip(clip), Color::CYAN)
+}
+
+/// `clipped`'s fills, made once, outside the content: a test switching the clip makes only the
+/// clip again in its compositions, so what draws the change is the clip's update, not a fill
+/// made anew.
+fn clipped_by(fills: &(Modifier, Modifier), clip: Shape) -> Modifier {
+    fills.0.clone().clip(clip).then(fills.1.clone())
+}
+
+fn fills() -> (Modifier, Modifier) {
+    (fill_color(Modifier, Color::GREEN), fill_color(Modifier, Color::CYAN))
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/ClipDrawTest.kt, simpleRectClip
@@ -269,6 +282,8 @@ fn rounded_rect_with_diff_corners_clip() {
     image.assert_pixel_color(Color::CYAN, 2, 2);
     image.assert_pixel_color(Color::GREEN, 2, 27);
     image.assert_pixel_color(Color::GREEN, 27, 2);
+    // Beyond Compose: the fourth corner, rounded too.
+    image.assert_pixel_color(Color::GREEN, 27, 27);
     assert_rect(&image, Color::CYAN, 18, 0);
 }
 
@@ -296,11 +311,11 @@ fn concave_clip() {
     assert_rect(&image, Color::CYAN, 30, 10);
 }
 
-/// A clip whose shape is the state's.
+/// A clip whose shape is the state's, read in the composition.
 fn switching(start: Shape) -> (ComposeTestRule, OwnedState<Shape>) {
     let model = mutable_state_of(start);
-    let m = model.handle();
-    let ui = rule(move || at_least_size(30, clipped(m.get())));
+    let (m, fills) = (model.handle(), fills());
+    let ui = rule(move || at_least_size(30, clipped_by(&fills, m.get())));
     (ui, model)
 }
 
@@ -310,7 +325,10 @@ fn switch_from_rect_to_rounded() {
     let (mut ui, model) = switching(rect_shape());
     assert_rect(&take_screenshot(&mut ui), Color::CYAN, 30, 0);
     model.set(rounded(12.0));
-    assert_green_corners(&take_screenshot(&mut ui));
+    let image = take_screenshot(&mut ui);
+    assert_green_corners(&image);
+    // Beyond Compose's corners: the inside is still cyan.
+    assert_rect(&image, Color::CYAN, 18, 0);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/ClipDrawTest.kt, switchFromRectToPath
@@ -414,12 +432,15 @@ fn emit_clip_later() {
         });
     });
     ui.wait_for_idle();
+    // Beyond Compose: before the clip, all green.
+    assert_rect(&take_screenshot(&mut ui), Color::GREEN, 30, 0);
     model.set(true);
     let image = take_screenshot(&mut ui);
     assert_rect(&image, Color::CYAN, 10, 0);
     assert_rect(&image, Color::GREEN, 30, 10);
 }
 
+/// The shape and the fills made once, so the layout direction alone draws the change.
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/ClipDrawTest.kt, switchLayoutDirection
 #[test]
 fn switch_layout_direction() {
@@ -429,10 +450,11 @@ fn switch_layout_direction() {
         LayoutDirection::Ltr => Outline::Rectangle(whole(size)),
         LayoutDirection::Rtl => triangle_outline(size),
     });
+    let modifier = clipped_by(&fills(), by_direction);
     let mut ui = rule(move || {
-        let by_direction = by_direction.clone();
+        let modifier = modifier.clone();
         CompositionLocalProvider(LOCAL_LAYOUT_DIRECTION.provides(d.get()), move || {
-            at_least_size(30, clipped(by_direction.clone()));
+            at_least_size(30, modifier.clone());
         });
     });
     assert_rect(&take_screenshot(&mut ui), Color::CYAN, 30, 0);
@@ -440,36 +462,43 @@ fn switch_layout_direction() {
     assert_triangle(&take_screenshot(&mut ui), Color::CYAN, Color::GREEN);
 }
 
+/// The modifier made once, so the size read in its layout alone lays out and draws the change.
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/ClipDrawTest.kt, resizingIsReflectedInGraphicsLayer
 #[test]
 fn resizing_is_reflected_in_graphics_layer() {
     let size = mutable_state_of(20);
     let s = size.handle();
+    let modifier = Modifier
+        .background(Color::WHITE)
+        .layout(|scope, measurable, constraints| {
+            let placeable = scope.measure(measurable, constraints);
+            scope.place(&placeable, 0, 0);
+            scope.layout(30, 30)
+        })
+        .layout(move |scope, measurable, constraints| {
+            let px = s.get();
+            let placeable = scope.measure(measurable, Constraints::fixed(px, px));
+            scope.place(&placeable, 0, 0);
+            scope.layout(constraints.constrain_width(px), constraints.constrain_height(px))
+        })
+        .clip_to_bounds();
+    let modifier = fill_color(modifier, Color::RED);
     let mut ui = rule(move || {
-        let modifier = Modifier
-            .background(Color::WHITE)
-            .layout(|scope, measurable, constraints| {
-                let placeable = scope.measure(measurable, constraints);
-                scope.place(&placeable, 0, 0);
-                scope.layout(30, 30)
-            })
-            .layout(move |scope, measurable, constraints| {
-                let px = s.get();
-                let placeable = scope.measure(measurable, Constraints::fixed(px, px));
-                scope.place(&placeable, 0, 0);
-                scope.layout(constraints.constrain_width(px), constraints.constrain_height(px))
-            })
-            .clip_to_bounds();
         // Compose's `Box` with no content: its minimum size.
         Layout(
-            fill_color(modifier, Color::RED),
+            modifier.clone(),
             measure_policy(|scope, _, constraints| {
                 scope.layout(constraints.min_width, constraints.min_height)
             }),
             callback(|| {}),
         );
     });
-    assert_rect_at(&take_screenshot(&mut ui), Color::RED, 20, 0, 10, 10);
+    let image = take_screenshot(&mut ui);
+    assert_rect_at(&image, Color::RED, 20, 0, 10, 10);
+    // Beyond Compose: the rest is the white background, the red clipped to 20 × 20.
+    for (x, y) in [(20, 0), (0, 20), (20, 20), (29, 29)] {
+        image.assert_pixel_color(Color::WHITE, x, y);
+    }
     size.set(30);
     assert_rect(&take_screenshot(&mut ui), Color::RED, 30, 0);
 }

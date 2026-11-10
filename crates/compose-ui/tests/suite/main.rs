@@ -73,6 +73,7 @@ mod review_d_panic_poisoned;
 mod review_d_support;
 mod review_groups;
 mod review_moved_node_attach;
+mod review_pointer_cancel;
 mod review_pwl;
 mod review_retained;
 mod review_shared_elements_2;

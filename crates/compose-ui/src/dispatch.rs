@@ -35,6 +35,21 @@ fn cancel_order(paths: &[&[HitEntry]], order: &mut Vec<HitEntry>) {
     }
 }
 
+/// Puts back in delegation order the delegates of one chain entry that `order` (innermost first)
+/// has reversed: Compose's hit path holds the delegating node once, and its `dispatchCancel` tells
+/// its delegates in delegation order, as the other passes (D2120).
+fn delegates_in_delegation_order(order: &mut [HitEntry]) {
+    let mut start = 0;
+    while start < order.len() {
+        let mut end = start + 1;
+        while end < order.len() && order[end].is_delegate_with(&order[start]) {
+            end += 1;
+        }
+        order[start..end].reverse();
+        start = end;
+    }
+}
+
 /// A pointer input node on a hit path.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct HitEntry {
@@ -486,6 +501,16 @@ impl UiTree {
                     | PointerEventType::ScaleChange,
                     Some(captured),
                 ) => self.captures[captured].1.clone(),
+                // A pointer held down that nothing knows of (its gesture was cancelled): its change
+                // comes down here, so its path is kept as a press's, as Compose's processor adds the
+                // hit path of every change that went down (D2121).
+                (PointerEventType::Move | PointerEventType::Unknown, None)
+                    if event.pressed && previous.is_none() =>
+                {
+                    let path = self.hit_test(position);
+                    self.captures.push((event.pointer, path.clone()));
+                    path
+                }
                 _ => self.hit_test(position),
             };
             // A mouse's hover: what it left hears `Exit`, what it came over `Enter`, as Compose's
@@ -704,9 +729,12 @@ impl UiTree {
         else {
             return;
         };
-        let (_, path) = self.captures.remove(index);
-        // Innermost first, as Compose's `Node.dispatchCancel` (D1931).
-        for entry in path.into_iter().rev() {
+        let (_, mut path) = self.captures.remove(index);
+        // Innermost first, as Compose's `Node.dispatchCancel` (D1931); one node's delegates in
+        // delegation order (D2120).
+        path.reverse();
+        delegates_in_delegation_order(&mut path);
+        for entry in path {
             // Compose has no cancel of one pointer: a node's pointers go together, and it hears the
             // others no more until a new press.
             for (_, other) in &mut self.captures {
@@ -720,6 +748,8 @@ impl UiTree {
             {
                 handler.on_cancel_pointer_input();
                 self.note_delegates_changed(entry.node, entry.index as usize);
+                // As `cancel_pointers`: a gesture's drawing ends without a context to say so.
+                self.invalidate_draw_of(entry.node);
             }
         }
         self.sync_noted_delegates();
@@ -1067,6 +1097,7 @@ impl UiTree {
         let paths: Vec<&[HitEntry]> = captures.iter().map(|(_, path)| &path[..]).collect();
         let mut told: Vec<HitEntry> = Vec::new();
         cancel_order(&paths, &mut told);
+        delegates_in_delegation_order(&mut told);
         for entry in told {
             if let Some(value) = self.get_mut(entry.node)
                 && value.chain_version == entry.version

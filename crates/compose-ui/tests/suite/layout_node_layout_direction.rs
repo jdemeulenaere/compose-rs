@@ -13,16 +13,18 @@ use compose_ui::*;
 type Seen = Rc<Cell<Option<LayoutDirection>>>;
 
 /// The direction `seen` has after the first frame, and after the provided one turns right to
-/// left, for `content` under `LOCAL_LAYOUT_DIRECTION`.
-fn before_and_after(content: impl Fn(&Seen) + 'static) -> [Option<LayoutDirection>; 2] {
+/// left, for the content `make` returns under `LOCAL_LAYOUT_DIRECTION`. `make` runs once, before
+/// composing, so the content's policy, modifiers and shape are the same in each recomposition
+/// (as Compose's test holds them in `val`s outside `setContent`): only the direction changes.
+fn before_and_after(make: impl FnOnce(&Seen) -> Rc<dyn Fn()>) -> [Option<LayoutDirection>; 2] {
     let direction = mutable_state_of(LayoutDirection::Ltr);
     let seen: Seen = Rc::default();
-    let (provided, s) = (direction.handle(), seen.clone());
-    let content = Rc::new(content);
+    let provided = direction.handle();
+    let content = make(&seen);
     let mut host = host(move || {
-        let (s, content) = (s.clone(), content.clone());
+        let content = content.clone();
         CompositionLocalProvider(LOCAL_LAYOUT_DIRECTION.provides(provided.get()), move || {
-            content(&s)
+            content()
         });
     });
     let before = seen.get();
@@ -44,14 +46,11 @@ fn recording(seen: &Seen) -> Modifier {
 fn composition_local_layout_direction_change_triggers_remeasure() {
     let directions = before_and_after(|seen| {
         let seen = seen.clone();
-        Layout(
-            Modifier,
-            measure_policy(move |scope, _, _| {
-                seen.set(Some(scope.layout_direction()));
-                scope.layout(0, 0)
-            }),
-            callback(|| {}),
-        );
+        let policy = measure_policy(move |scope, _, _| {
+            seen.set(Some(scope.layout_direction()));
+            scope.layout(0, 0)
+        });
+        Rc::new(move || Layout(Modifier, policy.clone(), callback(|| {})))
     });
     assert_eq!(directions, BOTH);
 }
@@ -60,7 +59,10 @@ fn composition_local_layout_direction_change_triggers_remeasure() {
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LayoutNodeLayoutDirectionTest.kt, compositionLocalLayoutDirectionChangeTriggersRedraw
 #[test]
 fn composition_local_layout_direction_change_triggers_redraw() {
-    let directions = before_and_after(|seen| Leaf(Modifier.fill_max_size().then(recording(seen))));
+    let directions = before_and_after(|seen| {
+        let modifier = Modifier.fill_max_size().then(recording(seen));
+        Rc::new(move || Leaf(modifier.clone()))
+    });
     assert_eq!(directions, BOTH);
 }
 
@@ -68,7 +70,8 @@ fn composition_local_layout_direction_change_triggers_redraw() {
 #[test]
 fn composition_local_layout_direction_change_triggers_redraw_layer_before_draw() {
     let directions = before_and_after(|seen| {
-        Leaf(Modifier.fill_max_size().graphics_layer(|_| {}).then(recording(seen)))
+        let modifier = Modifier.fill_max_size().graphics_layer(|_| {}).then(recording(seen));
+        Rc::new(move || Leaf(modifier.clone()))
     });
     assert_eq!(directions, BOTH);
 }
@@ -77,7 +80,8 @@ fn composition_local_layout_direction_change_triggers_redraw_layer_before_draw()
 #[test]
 fn composition_local_layout_direction_change_triggers_redraw_layer_after_draw() {
     let directions = before_and_after(|seen| {
-        Leaf(Modifier.fill_max_size().then(recording(seen)).graphics_layer(|_| {}))
+        let modifier = Modifier.fill_max_size().then(recording(seen)).graphics_layer(|_| {});
+        Rc::new(move || Leaf(modifier.clone()))
     });
     assert_eq!(directions, BOTH);
 }
@@ -113,7 +117,7 @@ fn layout_direction_change_requests_layer_outline_update() {
                 layer.shape = shape.clone();
                 layer.clip = true;
             });
-        Stack(modifier, callback(|| {}));
+        Rc::new(move || Stack(modifier.clone(), callback(|| {})))
     });
     assert_eq!(directions, BOTH);
 }

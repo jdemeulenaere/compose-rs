@@ -92,7 +92,30 @@ fn reused(fill: fn(Modifier, Color) -> Modifier) {
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/DrawModifierTest.kt, testDrawBehindWhenReused
 #[test]
 fn test_draw_behind_when_reused() {
+    // Compose's lambda is made again in the reused content and reads the key while drawing, so
+    // either the new element or the state read draws green: each is checked alone. First a new
+    // element of the new color, reading nothing while drawing.
     reused(draw_behind);
+    // Then the same element across the reuse, reading the key while drawing.
+    let key = mutable_state_of(0);
+    let (k1, k2) = (key.handle(), key.handle());
+    let drawn = Modifier.size(50.dp()).test_tag("container").draw_behind(move |scope| {
+        let color = if k1.get() == 0 { Color::RED } else { Color::GREEN };
+        let bounds = scope.bounds();
+        scope.draw_rect(bounds, Paint::fill(color));
+    });
+    let mut ui = rule(move || {
+        let drawn = drawn.clone();
+        ReusableContent(k2.get(), move || {
+            Box!(modifier = drawn.clone());
+        });
+    });
+    let image = ui.on_node_with_tag("container").capture_to_image();
+    image.assert_pixels(Some(IntSize::new(50, 50)), |_| Some(Color::RED));
+    key.set(1);
+    ui.wait_for_idle();
+    let image = ui.on_node_with_tag("container").capture_to_image();
+    image.assert_pixels(Some(IntSize::new(50, 50)), |_| Some(Color::GREEN));
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/DrawModifierTest.kt, testBackgroundWhenReused
@@ -123,5 +146,6 @@ fn test_invalidation_inside_on_size_changed() {
         Box!(modifier = modifier);
     });
     ui.wait_for_idle();
+    assert_eq!(state.get(), 2, "on_size_changed ran once");
     assert_eq!(draws.get(), 1);
 }

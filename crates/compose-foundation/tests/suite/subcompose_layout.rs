@@ -3324,6 +3324,26 @@ fn disposing_a_precomposed_slot_measures_and_places_nothing_again() {
     assert_eq!((measures.get(), layouts.get()), (1, 1));
 }
 
+/// Kept for reuse: out of the semantics, but among the deactivated nodes, as the tests'
+/// `assertLayoutDeactivatedById`.
+fn assert_kept(ui: &mut ComposeTestRule, kept: &[i32]) {
+    for item in kept {
+        ui.on_node_with_tag(&item.to_string()).assert_does_not_exist().assert_is_deactivated();
+    }
+}
+
+/// Gone: not even among the deactivated nodes (Compose's `assertIsDetached`).
+fn assert_gone(ui: &mut ComposeTestRule, gone: &[i32]) {
+    for item in gone {
+        ui.on_node_with_tag(&item.to_string()).assert_does_not_exist();
+        let deactivated = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ui.on_node_with_tag(&item.to_string()).assert_is_deactivated();
+        }))
+        .is_ok();
+        assert!(!deactivated, "{item} is kept for reuse, not gone");
+    }
+}
+
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/SubcomposeLayoutTest.kt, theSameSlotIsUsedWhileItIsInReusableList
 #[test]
 fn a_slot_kept_for_reuse_comes_back_for_its_own_id() {
@@ -3332,9 +3352,12 @@ fn a_slot_kept_for_reuse_comes_back_for_its_own_id() {
     items.set(vec![2, 3]); // 0 and 1 are kept for reuse.
     ui.wait_for_idle();
     assert_eq!(state.reusable_count(), 2);
+    assert_kept(&mut ui, &[0, 1]);
+    assert_gone(&mut ui, &[4]);
     items.set(vec![2, 3, 1]); // 1 is taken back.
     ui.wait_for_idle();
-    assert_nodes(&mut ui, &[2, 3, 1], &[0]);
+    assert_nodes(&mut ui, &[2, 3, 1], &[]);
+    assert_kept(&mut ui, &[0]);
     assert_eq!(state.reusable_count(), 1, "0 still kept");
 }
 
@@ -3347,11 +3370,23 @@ fn precomposing_a_kept_slot_s_id_takes_it_back() {
     ui.wait_for_idle();
     assert_eq!(state.reusable_count(), 3);
     let live = Rc::new(Cell::new(0));
-    let handle = state.precompose(3, live_content(&live));
+    // The test's `ItemContent(3)`, its composition counted too.
+    let l = live.clone();
+    let content = Callback::new(move || {
+        let l = l.clone();
+        remember_observer(move || Live(l));
+        Box!(modifier = Modifier.fill_max_size().test_tag("3"));
+    });
+    let handle = state.precompose(3, content);
     assert_eq!(state.reusable_count(), 2, "3 taken back");
     assert_eq!(handle.placeables_count(), 1);
     ui.wait_for_idle();
-    assert_nodes(&mut ui, &[2], &[0, 1, 4]);
+    assert_eq!(live.get(), 1);
+    // 3 is active again, precomposed, but not placed, so not in the semantics here (Compose's hold
+    // it): at least it's no longer among the deactivated nodes.
+    assert_nodes(&mut ui, &[2], &[]);
+    assert_kept(&mut ui, &[0, 1]);
+    assert_gone(&mut ui, &[3, 4]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/SubcomposeLayoutTest.kt, reuse1Node
@@ -3361,7 +3396,9 @@ fn a_policy_of_one_keeps_one_of_what_goes() {
     ui.wait_for_idle();
     items.set(vec![0, 1]);
     ui.wait_for_idle();
-    assert_nodes(&mut ui, &[0, 1], &[2, 3]);
+    assert_nodes(&mut ui, &[0, 1], &[]);
+    assert_kept(&mut ui, &[2]);
+    assert_gone(&mut ui, &[3]);
     assert_eq!(state.reusable_count(), 1);
 }
 
@@ -3442,8 +3479,9 @@ fn a_subcompose_layout_added_under_a_layout_reading_alignments_is_fine() {
     ui.wait_for_idle();
 }
 
-/// A slot reading `local`, its composition counted, under a layout whose policy stays the same: a
-/// change of the local composes the slot again, once, without the layout being measured again.
+/// A slot reading `local`, its composition counted, under a layout whose policy stays the same (the
+/// tests' `_noRemeasure`: no new policy asks for a measurement): a change of the local composes the
+/// slot again, once.
 fn local_change_composes_the_slot_once(local: &'static CompositionLocal<i32>) {
     let (value, seen, runs) = (mutable_state_of(1), Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
     let (s, r) = (seen.clone(), runs.clone());
@@ -3835,22 +3873,27 @@ fn a_precomposed_slot_of_a_nested_layout_deactivated_can_be_disposed() {
     ui.wait_for_idle();
     assert!(!active.get());
     // Both kept for reuse, as the layout holding them was deactivated with them active.
-    ui.on_node_with_tag("1").assert_does_not_exist();
-    ui.on_node_with_tag("0").assert_does_not_exist();
+    ui.on_node_with_tag("1").assert_does_not_exist().assert_is_deactivated();
+    ui.on_node_with_tag("0").assert_does_not_exist().assert_is_deactivated();
 }
 
 /// A layout node counting its measurements and placements, its update asking for both, its
-/// elements equal by `identity` only, as the test's `RemeasureAndRelayoutOnChangeModifierElement`.
+/// elements equal by `identity` only, as the test's `RemeasureAndRelayoutOnChangeModifierElement`:
+/// not auto-invalidated, its update invalidating its measurement and placement itself. With `auto`,
+/// the update's default invalidation asks for both instead.
 #[derive(Clone)]
 struct RemeasureAndRelayoutOnChange {
     measured: Rc<Cell<i32>>,
     placed: Rc<Cell<i32>>,
     identity: i32,
+    auto: bool,
 }
 
 struct RemeasureAndRelayoutOnChangeNode {
     measured: Rc<Cell<i32>>,
     placed: Rc<Cell<i32>>,
+    handle: Option<compose_ui::NodeHandle>,
+    auto: bool,
 }
 
 impl ModifierNodeElement for RemeasureAndRelayoutOnChange {
@@ -3859,13 +3902,17 @@ impl ModifierNodeElement for RemeasureAndRelayoutOnChange {
         RemeasureAndRelayoutOnChangeNode {
             measured: self.measured.clone(),
             placed: self.placed.clone(),
+            handle: None,
+            auto: self.auto,
         }
     }
-    /// The update's invalidation is the default one (`should_auto_invalidate`): a layout node is
-    /// measured, and placed, again.
     fn update(&self, node: &mut RemeasureAndRelayoutOnChangeNode) {
         node.measured = self.measured.clone();
         node.placed = self.placed.clone();
+        if let Some(handle) = node.handle.filter(|_| !self.auto) {
+            handle.invalidate_measurement();
+            handle.invalidate_placement();
+        }
     }
     fn same(&self, other: &Self) -> bool {
         self.identity == other.identity
@@ -3873,6 +3920,12 @@ impl ModifierNodeElement for RemeasureAndRelayoutOnChange {
 }
 
 impl ModifierNode for RemeasureAndRelayoutOnChangeNode {
+    fn should_auto_invalidate(&self) -> bool {
+        self.auto
+    }
+    fn on_attach(&mut self, context: &mut compose_ui::NodeContext<'_>) {
+        self.handle = Some(context.handle());
+    }
     fn as_layout(&mut self) -> Option<&mut dyn compose_ui::LayoutModifierNode> {
         Some(self)
     }
@@ -3895,15 +3948,16 @@ impl compose_ui::LayoutModifierNode for RemeasureAndRelayoutOnChangeNode {
     }
 }
 
-// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/SubcomposeLayoutTest.kt, precomposeOverReusedNodeWithUpdatedModifierIsNotCausingEarlyRemeasureForIt2
-#[test]
-fn precomposing_over_what_was_kept_with_a_new_element_measures_and_places_it_once() {
+/// The test's scene: a slot kept for reuse, precomposed again with a new element, premeasured, then
+/// taken by the measurement: measured once, by the premeasure, and placed once, by the placement.
+fn precompose_over_what_was_kept_with_a_new_element(auto: bool) {
     let state = SubcomposeLayoutState::with_policy(subcompose_slot_reuse_policy(1));
     let (measured, placed) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
     let element = |identity| RemeasureAndRelayoutOnChange {
         measured: measured.clone(),
         placed: placed.clone(),
         identity,
+        auto,
     };
     let (add, modifier) = (
         mutable_state_of(true),
@@ -3942,6 +3996,90 @@ fn precomposing_over_what_was_kept_with_a_new_element_measures_and_places_it_onc
     modifier.set(Rc::new(element(1)));
     let handle = state.precompose((), content);
     ui.wait_for_idle();
+    assert_eq!((measured.get(), placed.get()), (0, 0));
+    handle.premeasure(0, last_constraints.get());
+    ui.wait_for_idle();
+    assert_eq!((measured.get(), placed.get()), (1, 0));
+    add.set(true);
+    ui.wait_for_idle();
+    assert_eq!((measured.get(), placed.get()), (1, 1));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/SubcomposeLayoutTest.kt, precomposeOverReusedNodeWithUpdatedModifierIsNotCausingEarlyRemeasureForIt2
+#[test]
+#[ignore = "review: a kept slot reused by a precomposition has its modifier updated while its nodes \
+            are still detached, so a node's own `invalidate_measurement` from its update (not \
+            auto-invalidated) is dropped and the premeasure measures nothing; Compose's `onReuse` \
+            attaches the nodes before the update"]
+fn precomposing_over_what_was_kept_with_a_new_element_measures_and_places_it_once() {
+    precompose_over_what_was_kept_with_a_new_element(false);
+}
+
+/// The same, the update's default invalidation asking for the measurement and placement.
+#[test]
+fn precomposing_over_what_was_kept_with_an_auto_invalidated_element_measures_and_places_it_once() {
+    precompose_over_what_was_kept_with_a_new_element(true);
+}
+
+/// Review: a brand-new precomposed slot (never measured yet, `constraints == None`) whose modifier
+/// updates and invalidates measurement before `premeasure` must neither measure itself early nor
+/// trigger a parent `SubcomposeLayout` remeasure.
+#[test]
+#[ignore = "review: an invalidation in a precomposed slot never measured remeasures its \
+            SubcomposeLayout (`remeasure_children_in_place` answers true for a child without \
+            constraints); Compose swallows it, the node being measure-pending already"]
+fn a_new_precomposed_slot_invalidated_before_premeasure_waits_for_it() {
+    let state = SubcomposeLayoutState::new();
+    let (measured, placed, layout_measures) =
+        (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let element = |identity| RemeasureAndRelayoutOnChange {
+        measured: measured.clone(),
+        placed: placed.clone(),
+        identity,
+        auto: false,
+    };
+    let (add, modifier) = (
+        mutable_state_of(false),
+        mutable_state_of_with(Rc::new(element(0)), ReferentialEqualityPolicy),
+    );
+    let m = modifier.handle();
+    let content = Callback::new(move || {
+        Box!(move |_| {
+            Box!(modifier = Modifier.then_custom((*m.get()).clone()));
+        });
+    });
+    let last_constraints = Rc::new(Cell::new(Constraints::default()));
+    let (a, c, l, lm) =
+        (add.handle(), content.clone(), last_constraints.clone(), layout_measures.clone());
+    let policy = subcompose_policy(move |scope, constraints| {
+        lm.set(lm.get() + 1);
+        l.set(constraints);
+        let items: Vec<Placeable> = if a.get() {
+            scope
+                .subcompose((), c.clone())
+                .into_iter()
+                .map(|it| scope.measure(it, constraints))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        for item in &items {
+            scope.place(item, 0, 0);
+        }
+        scope.layout(10, 10)
+    });
+    let st = state.clone();
+    let mut ui = compose_test(move || {
+        SubcomposeLayoutWithState!(st.clone(), measure_policy = policy.clone())
+    });
+    ui.wait_for_idle();
+    assert_eq!(layout_measures.get(), 1);
+    let handle = state.precompose((), content);
+    ui.wait_for_idle();
+    assert_eq!(layout_measures.get(), 1, "precomposing measures nothing");
+    modifier.set(Rc::new(element(1)));
+    ui.wait_for_idle();
+    assert_eq!(layout_measures.get(), 1, "SubcomposeLayout not remeasured by unmeasured slot");
     assert_eq!((measured.get(), placed.get()), (0, 0));
     handle.premeasure(0, last_constraints.get());
     ui.wait_for_idle();
@@ -4154,8 +4292,10 @@ fn a_forced_measurement_from_an_effect_brings_a_slot_back() {
 fn a_slot_no_longer_composed_isnt_recomposed_for_what_its_layout_wrote() {
     let state = SubcomposeLayoutState::with_policy(subcompose_slot_reuse_policy(1));
     let (flag, updated) = (mutable_state_of(true), mutable_state_of(true));
-    let u = updated.handle();
+    let runs = Rc::new(Cell::new(0));
+    let (u, r) = (updated.handle(), runs.clone());
     let content = Callback::new(move || {
+        r.set(r.get() + 1);
         if u.get() {
             Box!(modifier = Modifier.test_tag("tag"));
         }
@@ -4178,12 +4318,14 @@ fn a_slot_no_longer_composed_isnt_recomposed_for_what_its_layout_wrote() {
         SubcomposeLayoutWithState!(st.clone(), measure_policy = policy.clone())
     });
     ui.wait_for_idle();
+    assert_eq!(runs.get(), 1);
     ui.on_node_with_tag("tag").assert_exists();
     flag.set(false);
     ui.wait_for_idle();
     // Deactivated before its content could recompose: kept, its box still there, not shown.
+    assert_eq!(runs.get(), 1, "deactivated slot did not recompose");
     assert_eq!(state.reusable_count(), 1);
-    ui.on_node_with_tag("tag").assert_does_not_exist();
+    ui.on_node_with_tag("tag").assert_does_not_exist().assert_is_deactivated();
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/SubcomposeLayoutTest.kt, remeasureRequestDuringSubcompositionIsNotSkippedForNotPlacedChild
