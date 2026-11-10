@@ -321,6 +321,7 @@ impl UiTree {
     /// Compose's `doRemeasure` asks it. Nothing for a deactivated node or one out of the tree;
     /// the root, or a node never measured, is measured in the next layout.
     pub(crate) fn remeasure_now(&mut self, node: NodeId) {
+        self.drain_node_requests();
         let root = self.root_id();
         let Some(value) = self.get(node) else { return };
         // Out of the tree, or content kept for reuse: no layout measures it either.
@@ -332,7 +333,11 @@ impl UiTree {
             return;
         };
         let before = value.layers[0].size;
-        self.node_mut(node).needs_measure = true;
+        let value = self.node_mut(node);
+        value.needs_measure = true;
+        if let Some(ahead) = value.lookahead.as_mut() {
+            ahead.needs_measure = true;
+        }
         // A measurement isn't a place to measure from (its callbacks invalidate instead).
         let allowed = mem::replace(&mut self.remeasure_allowed, false);
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
@@ -353,6 +358,7 @@ impl UiTree {
         self.remeasure_allowed = allowed;
         let size = result.unwrap_or_else(|panic| panic::resume_unwind(panic));
         self.laid_out_since_callbacks = true;
+        self.hover_stale = true;
         // Popups measured in it are placed by their providers, as after a layout.
         if !self.overlays.is_empty() {
             self.position_overlays();
@@ -651,8 +657,9 @@ impl UiTree {
             // Whether it placed what's inside it; with a block, the block says when it runs
             // (D2383).
             let value = self.node(node);
-            let block = (value.placements.as_ref())
-                .is_some_and(|placements| placements.blocks.get(layer).is_some_and(Option::is_some));
+            let block = (value.placements.as_ref()).is_some_and(|placements| {
+                placements.blocks.get(layer).is_some_and(Option::is_some)
+            });
             if !block {
                 let placed = value.content_placed_in == run;
                 self.note_inside_placed(node, layer, placed);
@@ -723,8 +730,9 @@ impl UiTree {
             self.mirror(relative, result.width);
             // Any previously placed child not placed here (and without a placement block to
             // place it) becomes unplaced, its subtree with it (D2383).
-            let has_block = (self.node(node).placements.as_ref())
-                .is_some_and(|placements| placements.blocks.get(layer).is_some_and(Option::is_some));
+            let has_block = (self.node(node).placements.as_ref()).is_some_and(|placements| {
+                placements.blocks.get(layer).is_some_and(Option::is_some)
+            });
             if !has_block {
                 for index in 0..self.node(node).children.len() {
                     let child = self.node(node).children[index].node;

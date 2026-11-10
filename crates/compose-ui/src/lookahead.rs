@@ -79,7 +79,7 @@ pub(crate) struct LookaheadState {
     layer_constraints: SmallVec<[Constraints; 2]>,
     layers: SmallVec<[Layer; 2]>,
     constraints: Option<Constraints>,
-    needs_measure: bool,
+    pub(crate) needs_measure: bool,
     subtree_needs_measure: bool,
     needs_placement: bool,
     subtree_needs_placement: bool,

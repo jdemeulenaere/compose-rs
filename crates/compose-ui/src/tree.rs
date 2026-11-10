@@ -595,6 +595,8 @@ pub struct UiTree {
     /// Pointer nodes came, went or changed: the resting mouse's hover is refreshed even if
     /// nothing was laid out.
     pub(crate) hover_stale: bool,
+    /// `draw_ahead` is recording a premeasured repaint boundary not yet placed by its parent.
+    pub(crate) drawing_ahead: bool,
     /// The lifecycle steps of nodes a paused composition's resumes reused, held until it's
     /// applied or discarded (`Applier::on_paused_end`, D1162).
     pub(crate) paused_lifecycle: Vec<crate::lifecycle::Lifecycle>,
@@ -777,6 +779,7 @@ impl UiTree {
             autofill: None,
             autofill_available: false,
             hover_stale: false,
+            drawing_ahead: false,
             paused_lifecycle: Vec::new(),
             side_effects: Vec::new(),
             remeasure_allowed: false,

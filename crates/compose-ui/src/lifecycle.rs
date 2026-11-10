@@ -844,7 +844,7 @@ impl UiTree {
         self.drain_node_requests();
     }
 
-    fn drain_node_requests(&mut self) {
+    pub(crate) fn drain_node_requests(&mut self) {
         if self.focus_requests.measure_requests.borrow().is_empty()
             && self.focus_requests.node_invalidations.borrow().is_empty()
         {

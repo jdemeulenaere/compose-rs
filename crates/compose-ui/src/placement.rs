@@ -492,11 +492,22 @@ impl UiTree {
 
     fn mark_subtree_placed_under_placed_parent(&mut self, node: NodeId) {
         let value = self.node_mut(node);
-        if value.placed || !value.placed_by_parent || value.deactivated || value.unplaced_layers != 0
+        if value.placed
+            || !value.placed_by_parent
+            || value.deactivated
+            || value.unplaced_layers != 0
         {
             return;
         }
         value.placed = true;
+        let told = value.kinds.any(crate::node_chain::NodeKinds::ON_PLACED);
+        let waiting = value.needs_placement || value.subtree_needs_placement;
+        if told && !self.in_lookahead {
+            self.placed_layers.push((node, 0));
+        }
+        if waiting {
+            self.placed_with_blocks_waiting(node);
+        }
         for index in 0..self.node(node).children.len() {
             let child = self.node(node).children[index].node;
             self.mark_subtree_placed_under_placed_parent(child);
