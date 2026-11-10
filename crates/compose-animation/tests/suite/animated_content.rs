@@ -363,3 +363,304 @@ fn the_entering_content_stays_composed_when_the_old_one_has_left_first() {
     ui.advance_time_by_frame();
     assert_eq!(created.get(), 1, "not composed again");
 }
+
+/// Where it's last been placed in the lookahead scope's coordinates: ahead, and now.
+type Seen = Rc<Cell<Option<compose_ui::Offset>>>;
+
+/// A layout noting where it's placed in `scope`'s coordinates, ahead in `ahead` and now in
+/// `now`, as the tests' `localLookaheadPositionOf` and `localPositionOf` placement blocks.
+fn noting_position(scope: compose_ui::LookaheadScope, ahead: Seen, now: Seen) -> Modifier {
+    Modifier.layout(move |measure, measurable, constraints| {
+        let placeable = measure.measure(measurable, constraints);
+        let (ahead, now) = (ahead.clone(), now.clone());
+        measure.layout_with(placeable.width, placeable.height, move |placement| {
+            if let (Some(frame), Some(own)) =
+                (scope.lookahead_scope_coordinates(placement), placement.coordinates())
+            {
+                if placement.is_looking_ahead() {
+                    let at =
+                        scope.local_lookahead_position_of(frame, own, compose_ui::Offset::ZERO);
+                    ahead.set(Some(at));
+                } else {
+                    now.set(Some(frame.local_position_of(&own, compose_ui::Offset::ZERO)));
+                }
+            }
+            placement.place(&placeable, 0, 0);
+        })
+    })
+}
+
+/// A layout noting the size its content's measured at ahead, as the tests' `TestModifier`.
+fn noting_size_ahead(size: Rc<Cell<Option<IntSize>>>) -> Modifier {
+    Modifier.layout(move |measure, measurable, constraints| {
+        let placeable = measure.measure(measurable, constraints);
+        if measure.is_looking_ahead() {
+            size.set(Some(placeable.size()));
+        }
+        measure.layout_with(placeable.width, placeable.height, move |placement| {
+            placement.place(&placeable, 0, 0);
+        })
+    })
+}
+
+// Compose: compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedContentTest.kt, AnimatedContentLookaheadTest
+/// In a `LookaheadScope`, the container's size ahead is its target content's, from the first
+/// frame of the change to its end, not the size animating; and the target content is placed
+/// ahead at the container's origin, centred in a container of its own size.
+#[test]
+fn ahead_the_container_is_its_target_contents_size_and_holds_it_at_its_origin() {
+    let state = MutableTransitionState::new(true);
+    let size_ahead = Rc::new(Cell::new(None::<IntSize>));
+    let (ahead, now): (Seen, Seen) = Default::default();
+    let (shown, s, a, n) = (state.clone(), size_ahead.clone(), ahead.clone(), now.clone());
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
+        let (shown, s, a, n) = (shown.clone(), s.clone(), a.clone(), n.clone());
+        compose_ui::LookaheadScope(callback(move |scope| {
+            let (shown, a, n) = (shown.clone(), a.clone(), n.clone());
+            Box!(modifier = noting_size_ahead(s.clone()), move |_| {
+                let transition = remember_transition(&shown, None);
+                PLAYING.with(|playing| *playing.borrow_mut() = Some(transition.clone()));
+                let (a, n) = (a.clone(), n.clone());
+                transition.AnimatedContent(
+                    Modifier,
+                    |_| {
+                        fade_in()
+                            .together_with(fade_out())
+                            .using(Some(size_transform(true, |_, _| {
+                                tween(80).easing(LINEAR_EASING).into()
+                            })))
+                    },
+                    Alignment::CENTER,
+                    ContentKey::state(),
+                    move |_, first: bool| {
+                        if first {
+                            Box!(modifier = Modifier.size(400.dp()));
+                        } else {
+                            let noting = noting_position(scope, a.clone(), n.clone());
+                            Box!(modifier = noting.size(20.dp()));
+                        }
+                    },
+                );
+            });
+        }));
+    });
+    ui.wait_for_idle();
+    assert_eq!(size_ahead.get(), Some(IntSize::new(400, 400)));
+    state.set_target_state(false);
+    ui.wait_for_idle();
+    ui.advance_time_by_frame();
+    let mut frames = 0;
+    while state.current_state() != state.target_state() {
+        ui.wait_for_idle();
+        let play_time = play_time_millis();
+        assert_eq!(size_ahead.get(), Some(IntSize::new(20, 20)), "at {play_time} ms");
+        assert!(now.get().is_some(), "placed now at {play_time} ms");
+        assert_eq!(ahead.get(), Some(compose_ui::Offset::ZERO), "at {play_time} ms");
+        ui.advance_time_by_frame();
+        frames += 1;
+        assert!(frames < 100, "the change never ended");
+    }
+    ui.wait_for_idle();
+}
+
+// Compose: compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedContentTest.kt, testSizeTransformAlwaysContinuous
+/// Under `animate_bounds` growing it from 200 to 300 in a `LookaheadScope`, a container whose
+/// content stays (the same key) grows frame by frame, never shrinking, to 300 × 300.
+#[test]
+fn under_animated_bounds_the_container_grows_without_going_back() {
+    let large = mutable_state_of(false);
+    let current = Rc::new(Cell::new(IntSize::ZERO));
+    let (is_large, c) = (large.handle(), current.clone());
+    let mut ui = compose_test(move || {
+        let c = c.clone();
+        compose_ui::LookaheadScope(callback(move |scope| {
+            let c = c.clone();
+            Box!(move |_| {
+                let c = c.clone();
+                let side = if is_large.get() { 300 } else { 200 };
+                let noting = Modifier.layout(move |measure, measurable, constraints| {
+                    let unbounded = compose_ui::Constraints {
+                        max_width: compose_ui::Constraints::INFINITY,
+                        max_height: compose_ui::Constraints::INFINITY,
+                        ..constraints
+                    };
+                    let placeable = measure.measure(measurable, unbounded);
+                    if !measure.is_looking_ahead() {
+                        c.set(placeable.size());
+                    }
+                    measure.layout_with(placeable.width, placeable.height, move |placement| {
+                        placement.place(&placeable, 0, 0);
+                    })
+                });
+                AnimatedContent!(
+                    is_large.get(),
+                    modifier = Modifier
+                        .animate_bounds_with(
+                            scope,
+                            Modifier.size(side.dp()),
+                            SharedTransitionDefaults::bounds_transform(),
+                            false,
+                        )
+                        .then(noting)
+                        .background(compose_ui::Color::GRAY),
+                    transition_spec = |_| fade_in().together_with(fade_out()),
+                    label = "Test",
+                    content_key = ContentKey::of(|_: &bool| true),
+                    content = |_, _: bool| {
+                        Box!(
+                            modifier = Modifier
+                                .background(compose_ui::Color::BLACK)
+                                .size((200.dp(), 100.dp()))
+                        );
+                    }
+                );
+            });
+        }));
+    });
+    ui.wait_for_idle();
+    ui.set_auto_advance(false);
+    large.set(true);
+    assert_eq!(current.get(), IntSize::new(200, 200));
+    let mut last = IntSize::new(200, 200);
+    let mut frames = 0;
+    loop {
+        ui.advance_time_by_frame();
+        ui.wait_for_idle();
+        let now = current.get();
+        assert!(now.width >= last.width && now.height >= last.height, "{last:?} to {now:?}");
+        last = now;
+        frames += 1;
+        if frames >= 5 && now == IntSize::new(300, 300) {
+            break;
+        }
+        assert!(frames < 200, "never reached 300 × 300: {now:?}");
+    }
+}
+
+// Compose: compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedContentTest.kt, testTargetChangeLookaheadPlacement
+/// In a `LookaheadScope`, the content entering is placed ahead at the origin, while the one
+/// leaving (filling the root) is placed ahead centred on the smaller target, away from it; when
+/// the target changes back, the content that's the target again is placed ahead at the origin.
+#[test]
+fn ahead_the_target_content_is_at_the_origin_whichever_it_is() {
+    let state = MutableTransitionState::new(true);
+    let (first_ahead, second_ahead, ignored): (Seen, Seen, Seen) = Default::default();
+    let (shown, a1, a2, i) =
+        (state.clone(), first_ahead.clone(), second_ahead.clone(), ignored.clone());
+    let mut ui = compose_test(move || {
+        let (shown, a1, a2, i) = (shown.clone(), a1.clone(), a2.clone(), i.clone());
+        compose_ui::LookaheadScope(callback(move |scope| {
+            let transition = remember_transition(&shown, None);
+            PLAYING.with(|playing| *playing.borrow_mut() = Some(transition.clone()));
+            let (a1, a2, i) = (a1.clone(), a2.clone(), i.clone());
+            transition.AnimatedContent(
+                Modifier,
+                |_| fade_in().together_with(fade_out()).using(None),
+                Alignment::CENTER,
+                ContentKey::state(),
+                move |_, first: bool| {
+                    if first {
+                        let noting = noting_position(scope, a1.clone(), i.clone());
+                        Box!(modifier = noting.fill_max_size().background(compose_ui::Color::BLUE));
+                    } else {
+                        let noting = noting_position(scope, a2.clone(), i.clone());
+                        Box!(modifier = noting.size(100.dp()).background(compose_ui::Color::RED));
+                    }
+                },
+            );
+        }));
+    });
+    ui.wait_for_idle();
+    assert!(state.target_state() && state.current_state());
+    assert_eq!(first_ahead.get(), Some(compose_ui::Offset::ZERO));
+    ui.set_auto_advance(false);
+    state.set_target_state(false);
+    ui.wait_for_idle();
+    ui.advance_time_by_frame();
+    for _ in 0..3 {
+        assert_ne!(state.current_state(), state.target_state());
+        ui.wait_for_idle();
+        assert_eq!(second_ahead.get(), Some(compose_ui::Offset::ZERO));
+        ui.advance_time_by_frame();
+        ui.wait_for_idle();
+    }
+    // The content leaving, ahead, is centred on the 100 × 100 target, away from the origin.
+    let leaving = first_ahead.get().unwrap();
+    assert_ne!(leaving.x, 0.0, "{leaving:?}");
+    assert_ne!(leaving.y, 0.0, "{leaving:?}");
+    // Interrupted: the first content's the target again, at the origin ahead.
+    state.set_target_state(true);
+    ui.advance_time_by_frame();
+    ui.wait_for_idle();
+    assert_eq!(first_ahead.get(), Some(compose_ui::Offset::ZERO));
+}
+
+// Compose: compose/animation/animation/src/commonMain/kotlin/androidx/compose/animation/AnimatedVisibility.kt, AnimatedEnterExitMeasurePolicy.measure (`targetSize` set ahead once measured ahead)
+/// In a `LookaheadScope`, the size transform heads for the target content's size ahead: a
+/// content 100 wide ahead and 50 now, entering after one of 20 along a linear 100 ms tween, makes
+/// the container `20 + 0.8 t` wide at `t` ms, then its size now once the change is over.
+#[test]
+fn in_a_scope_the_size_transform_heads_for_the_targets_size_ahead() {
+    let state = MutableTransitionState::new(true);
+    let width = Rc::new(Cell::new(0));
+    let (shown, w) = (state.clone(), width.clone());
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
+        let (shown, w) = (shown.clone(), w.clone());
+        compose_ui::LookaheadScope(callback(move |_| {
+            let w = w.clone();
+            let noting = Modifier.layout(move |measure, measurable, constraints| {
+                let placeable = measure.measure(measurable, constraints);
+                if !measure.is_looking_ahead() {
+                    w.set(placeable.width);
+                }
+                measure.layout_with(placeable.width, placeable.height, move |placement| {
+                    placement.place(&placeable, 0, 0);
+                })
+            });
+            let transition = remember_transition(&shown, None);
+            PLAYING.with(|playing| *playing.borrow_mut() = Some(transition.clone()));
+            transition.AnimatedContent(
+                noting,
+                |_| {
+                    EnterTransition::NONE.together_with(ExitTransition::NONE).using(Some(
+                        size_transform(true, |_, _| tween(100).easing(LINEAR_EASING).into()),
+                    ))
+                },
+                Alignment::TOP_START,
+                ContentKey::state(),
+                |_, first: bool| {
+                    if first {
+                        Box!(modifier = Modifier.size(20.dp()));
+                    } else {
+                        let by_pass = Modifier.layout(|measure, measurable, _| {
+                            let side = if measure.is_looking_ahead() { 100 } else { 50 };
+                            let fixed = compose_ui::Constraints::fixed(side, side);
+                            let placeable = measure.measure(measurable, fixed);
+                            measure.layout_with(side, side, move |placement| {
+                                placement.place(&placeable, 0, 0);
+                            })
+                        });
+                        Box!(modifier = by_pass);
+                    }
+                },
+            );
+        }));
+    });
+    ui.wait_for_idle();
+    assert_eq!(width.get(), 20);
+    state.set_target_state(false);
+    ui.wait_for_idle();
+    let mut checked = 0;
+    while state.current_state() != state.target_state() {
+        let play_time = play_time_millis() as i32;
+        if play_time > 0 && play_time < 100 {
+            let expected = 20 + play_time * 4 / 5;
+            assert!((width.get() - expected).abs() <= 1, "{} at {play_time} ms", width.get());
+            checked += 1;
+        }
+        ui.advance_time_by_frame();
+    }
+    assert!(checked > 3, "{checked} frames checked");
+    ui.wait_for_idle();
+    assert_eq!(width.get(), 50);
+}

@@ -866,7 +866,8 @@ impl<T: PartialEq + 'static> ComposeArg for StateKey<T> {
 }
 
 /// The contents stacked, each measured with the container's constraints, as large as the
-/// largest but a pending content, each aligned in it (left to right, as Compose's).
+/// largest but a pending content (ahead, in a `LookaheadScope`: as large as the target content),
+/// each aligned in it (left to right, as Compose's).
 struct ContentMeasurePolicy<T> {
     root: Rc<Root<T>>,
     /// The states shown: at measuring, one to a child, those whose contents left being gone.
@@ -910,15 +911,22 @@ impl<T: PartialEq + 'static> MeasurePolicy for ContentMeasurePolicy<T> {
             }
         }
         let placeables: Vec<_> = placeables.into_iter().flatten().collect();
-        let mut size = IntSize::ZERO;
-        for (index, placeable) in placeables.iter().enumerate() {
-            if pending != Some(index) {
-                size = IntSize::new(
-                    size.width.max(placeable.width),
-                    size.height.max(placeable.height),
-                );
+        let size = if scope.is_looking_ahead() {
+            // Ahead, in a `LookaheadScope`, the target content's size: where the change ends,
+            // as Compose's `AnimatedContentMeasurePolicy` (D2350).
+            target.map_or(IntSize::ZERO, |target| placeables[target].size())
+        } else {
+            let mut size = IntSize::ZERO;
+            for (index, placeable) in placeables.iter().enumerate() {
+                if pending != Some(index) {
+                    size = IntSize::new(
+                        size.width.max(placeable.width),
+                        size.height.max(placeable.height),
+                    );
+                }
             }
-        }
+            size
+        };
         let alignment = self.root.content_alignment.get();
         for placeable in &placeables {
             let at = alignment.align(placeable.size(), size, LayoutDirection::Ltr);
@@ -1035,6 +1043,13 @@ impl<T: Clone + PartialEq + 'static> LayoutModifierNode for SizeNode<T> {
     ) -> MeasureResult {
         let placeable = scope.measure(content, constraints);
         let current = placeable.size();
+        if scope.is_looking_ahead() {
+            // Ahead, the content's size, not animated and not kept as where an animation goes
+            // on from (nor as the container's size now), as Compose's `SizeModifierNode`: the
+            // content fills it (D2350).
+            scope.place(&placeable, 0, 0);
+            return scope.layout(current.width, current.height);
+        }
         let size = match &self.animation {
             None => {
                 self.last_size.set(Some(current));

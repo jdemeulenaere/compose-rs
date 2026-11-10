@@ -1,6 +1,6 @@
 //! `CapturedAnimatedVisibility`, against Compose's `CapturedAnimatedVisibilityTest`: the content
 //! leaving the composition as soon as it's hidden, what's drawn being its last frame. The pixels
-//! of its test are read from the display list; its lookahead tests wait for lookahead.
+//! of its test are read from the display list; in a `LookaheadScope`, it is where it ends ahead.
 
 #![allow(non_snake_case)]
 
@@ -553,4 +553,123 @@ fn a_captured_frame_keeps_its_shaders() {
     ui.advance_time_by_frame();
     ui.advance_time_by_frame();
     assert_eq!(shaders(&mut ui), shown);
+}
+
+// Compose: compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CapturedAnimatedVisibilityTest.kt, testCapturedAnimatedVisibility_inLookaheadScope
+/// In a `LookaheadScope`, what's around it is measured ahead at its content's size while it's
+/// shown, and at no size from the frame it's hidden (the content gone at once): ahead, it's
+/// where it ends.
+#[test]
+fn ahead_it_is_its_contents_size_shown_and_no_size_hidden() {
+    let visible = mutable_state_of(true);
+    let sizes_ahead: Rc<std::cell::RefCell<Vec<IntSize>>> = Rc::default();
+    let present = Rc::new(Cell::new(false));
+    let (shown, seen, noted) = (visible.handle(), sizes_ahead.clone(), present.clone());
+    let mut ui = compose_test(move || {
+        let (seen, noted) = (seen.clone(), noted.clone());
+        LookaheadScope(callback(move |_| {
+            let (seen, noted) = (seen.clone(), noted.clone());
+            let noting = Modifier.layout(move |measure, measurable, constraints| {
+                let placeable = measure.measure(measurable, constraints);
+                if measure.is_looking_ahead() {
+                    seen.borrow_mut().push(placeable.size());
+                }
+                measure.layout_with(placeable.width, placeable.height, move |placement| {
+                    placement.place(&placeable, 0, 0);
+                })
+            });
+            Box!(modifier = noting, {
+                let noted = noted.clone();
+                CapturedAnimatedVisibility!(
+                    shown.get(),
+                    enter = expand_vertically_with(tween(160), Alignment::BOTTOM, true, |_| 0),
+                    exit = shrink_vertically_with(tween(160), Alignment::BOTTOM, true, |_| 0),
+                    { Noted!(noted.clone(), Modifier.size((200.dp(), 100.dp()))) }
+                );
+            });
+        }));
+    });
+    ui.wait_for_idle();
+    assert!(present.get());
+    {
+        let seen = sizes_ahead.borrow();
+        assert!(!seen.is_empty());
+        assert!(seen.iter().all(|it| *it == IntSize::new(200, 100)), "shown: {seen:?}");
+    }
+    sizes_ahead.borrow_mut().clear();
+    ui.set_auto_advance(false);
+    visible.set(false);
+    ui.advance_time_by_frame();
+    assert!(!present.get(), "the content leaves at once");
+    ui.wait_for_idle();
+    let seen = sizes_ahead.borrow();
+    assert!(!seen.is_empty());
+    assert!(seen.iter().all(|it| *it == IntSize::ZERO), "hidden: {seen:?}");
+}
+
+// Compose: compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CapturedAnimatedVisibilityTest.kt, testCapturedAnimatedVisibility_siblingLookaheadInColumn
+/// In a column in a `LookaheadScope`, the sibling below it is placed ahead where it ends as soon
+/// as it's hidden (at the top), while now it follows the shrinking: half-way up half-way
+/// through, and at the top at the end.
+#[test]
+fn ahead_a_sibling_below_it_goes_where_it_ends_at_once() {
+    type Seen = Rc<Cell<Option<Offset>>>;
+    let visible = mutable_state_of(true);
+    let (ahead, now): (Seen, Seen) = Default::default();
+    let (shown, a, n) = (visible.handle(), ahead.clone(), now.clone());
+    let mut ui = compose_test(move || {
+        let (a, n) = (a.clone(), n.clone());
+        LookaheadScope(callback(move |scope: LookaheadScope| {
+            let (a, n) = (a.clone(), n.clone());
+            Column!({
+                let linear = || tween(160).easing(LINEAR_EASING);
+                CapturedAnimatedVisibility!(
+                    shown.get(),
+                    enter = expand_vertically_with(linear(), Alignment::BOTTOM, true, |_| 0),
+                    exit = shrink_vertically_with(linear(), Alignment::BOTTOM, true, |_| 0),
+                    { Box!(modifier = Modifier.size((200.dp(), 100.dp()))) }
+                );
+                let (a, n) = (a.clone(), n.clone());
+                let noting = Modifier.layout(move |measure, measurable, constraints| {
+                    let placeable = measure.measure(measurable, constraints);
+                    let (a, n) = (a.clone(), n.clone());
+                    measure.layout_with(placeable.width, placeable.height, move |placement| {
+                        if let (Some(frame), Some(own)) =
+                            (scope.lookahead_scope_coordinates(placement), placement.coordinates())
+                        {
+                            if placement.is_looking_ahead() {
+                                a.set(Some(scope.local_lookahead_position_of(
+                                    frame,
+                                    own,
+                                    Offset::ZERO,
+                                )));
+                            } else {
+                                n.set(Some(frame.local_position_of(&own, Offset::ZERO)));
+                            }
+                        }
+                        placement.place(&placeable, 0, 0);
+                    })
+                });
+                Box!(modifier = Modifier.size((200.dp(), 50.dp())).then(noting));
+            });
+        }));
+    });
+    let round = |seen: &Seen| seen.get().map(|at| at.round());
+    ui.wait_for_idle();
+    assert_eq!(round(&ahead), Some(IntOffset::new(0, 100)));
+    assert_eq!(round(&now), Some(IntOffset::new(0, 100)));
+    ui.set_auto_advance(false);
+    visible.set(false);
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    // Ahead, where it ends: at once at the top.
+    assert_eq!(round(&ahead), Some(IntOffset::ZERO));
+    ui.advance_time_by(Duration::from_millis(80));
+    // Now, half-way up half-way through the 160 ms shrink.
+    assert_eq!(round(&now), Some(IntOffset::new(0, 50)));
+    ui.advance_time_by(Duration::from_millis(100));
+    ui.set_auto_advance(true);
+    ui.wait_for_idle();
+    assert_eq!(round(&ahead), Some(IntOffset::ZERO));
+    assert_eq!(round(&now), Some(IntOffset::ZERO));
 }

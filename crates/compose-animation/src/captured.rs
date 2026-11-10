@@ -68,7 +68,11 @@ fn CapturedEnterExit(
     let is_exiting = child.target_state() == EnterExitState::PostExit;
     let capture = remember(DrawCapture::new);
     let policy = remember(|| {
-        Rc::new(CapturedMeasurePolicy { exiting: Cell::new(false), size: Cell::new(IntSize::ZERO) })
+        Rc::new(CapturedMeasurePolicy {
+            exiting: Cell::new(false),
+            size: Cell::new(IntSize::ZERO),
+            lookahead_size: Cell::new(None),
+        })
     });
     policy.exiting.set(is_exiting);
     let enter_exit = create_enter_exit_modifier(
@@ -79,9 +83,20 @@ fn CapturedEnterExit(
         false,
         "CapturedBuiltIn",
     );
+    // Ahead, in a `LookaheadScope`, no size once exiting: what's around it is laid out ahead as
+    // it ends, as Compose's `CapturedAnimatedVisibilityImpl`'s layout (D2352).
+    let no_size_ahead_when_exiting = Modifier.layout(move |scope, measurable, constraints| {
+        let placeable = scope.measure(measurable, constraints);
+        let (width, height) = if is_exiting && scope.is_looking_ahead() {
+            (0, 0)
+        } else {
+            (placeable.width, placeable.height)
+        };
+        scope.layout_with(width, height, move |placement| placement.place(&placeable, 0, 0))
+    });
     let (drawn, kept) = (capture.clone(), capture);
     Layout(
-        modifier.then(enter_exit).draw_behind(move |scope| {
+        modifier.then(no_size_ahead_when_exiting).then(enter_exit).draw_behind(move |scope| {
             if is_exiting {
                 scope.draw_captured(&drawn);
             }
@@ -102,13 +117,23 @@ fn CapturedEnterExit(
 }
 
 /// Its size is the content's, kept for when the content's gone, as
-/// `CapturedAnimatedEnterExitMeasurePolicy`.
+/// `CapturedAnimatedEnterExitMeasurePolicy`: the size of now and, in a `LookaheadScope`, the size
+/// of ahead, each kept by its own pass.
 struct CapturedMeasurePolicy {
     exiting: Cell<bool>,
     size: Cell<IntSize>,
+    /// The content's size ahead, as `lookaheadSize`: none until measured ahead.
+    lookahead_size: Cell<Option<IntSize>>,
 }
 
 impl CapturedMeasurePolicy {
+    /// The size kept by the pass `looking_ahead` says, as `lookaheadSize` and `approachSize`.
+    /// None measured ahead yet (Compose's check fails there), the size of now.
+    fn kept(&self, looking_ahead: bool) -> IntSize {
+        let now = self.size.get();
+        if looking_ahead { self.lookahead_size.get().unwrap_or(now) } else { now }
+    }
+
     /// The kept size's while exiting, else the largest of the children's: not by measuring, which
     /// would take the kept size away.
     fn intrinsic(
@@ -131,12 +156,17 @@ impl MeasurePolicy for CapturedMeasurePolicy {
         measurables: &[Measurable],
         constraints: Constraints,
     ) -> MeasureResult {
+        let looking_ahead = scope.is_looking_ahead();
         if self.exiting.get() {
-            let size = self.size.get();
+            let size = self.kept(looking_ahead);
             return scope.layout(size.width, size.height);
         }
         let size = measure_stacked(scope, measurables, constraints);
-        self.size.set(size);
+        if looking_ahead {
+            self.lookahead_size.set(Some(size));
+        } else {
+            self.size.set(size);
+        }
         scope.layout(size.width, size.height)
     }
 
@@ -146,7 +176,8 @@ impl MeasurePolicy for CapturedMeasurePolicy {
         measurables: &[IntrinsicMeasurable],
         height: i32,
     ) -> i32 {
-        self.intrinsic(self.size.get().width, measurables, |measurable| {
+        let kept = self.kept(scope.is_looking_ahead()).width;
+        self.intrinsic(kept, measurables, |measurable| {
             scope.min_intrinsic_width(measurable, height)
         })
     }
@@ -157,7 +188,8 @@ impl MeasurePolicy for CapturedMeasurePolicy {
         measurables: &[IntrinsicMeasurable],
         width: i32,
     ) -> i32 {
-        self.intrinsic(self.size.get().height, measurables, |measurable| {
+        let kept = self.kept(scope.is_looking_ahead()).height;
+        self.intrinsic(kept, measurables, |measurable| {
             scope.min_intrinsic_height(measurable, width)
         })
     }
@@ -168,7 +200,8 @@ impl MeasurePolicy for CapturedMeasurePolicy {
         measurables: &[IntrinsicMeasurable],
         height: i32,
     ) -> i32 {
-        self.intrinsic(self.size.get().width, measurables, |measurable| {
+        let kept = self.kept(scope.is_looking_ahead()).width;
+        self.intrinsic(kept, measurables, |measurable| {
             scope.max_intrinsic_width(measurable, height)
         })
     }
@@ -179,7 +212,8 @@ impl MeasurePolicy for CapturedMeasurePolicy {
         measurables: &[IntrinsicMeasurable],
         width: i32,
     ) -> i32 {
-        self.intrinsic(self.size.get().height, measurables, |measurable| {
+        let kept = self.kept(scope.is_looking_ahead()).height;
+        self.intrinsic(kept, measurables, |measurable| {
             scope.max_intrinsic_height(measurable, width)
         })
     }
