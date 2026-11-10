@@ -2250,6 +2250,7 @@ impl Applier for UiTree {
             self.node_mut(slot).children.insert(index, child);
         }
         self.invalidate_measure(parent);
+        self.invalidate_measure(id);
         // In the tree now, its subtree too: their modifier nodes are attached when the pass ends.
         // A node movable content moved here from an attached parent in this pass is detached
         // first when the pass ends (`detach_pending`), then attached with what's attaching here.

@@ -98,6 +98,7 @@ mod lazy_support;
 mod legacy;
 mod locals;
 mod lookahead_scenes;
+mod lookahead_scenes_rest;
 mod lookahead_toggle_placement;
 mod magnifier;
 mod modifier_memoization;

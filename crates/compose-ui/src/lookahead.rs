@@ -485,6 +485,24 @@ impl LookaheadScope {
         &self,
         placement: &PlacementScope<'_>,
     ) -> Option<LayoutCoordinates> {
+        if self.id == OWN_ROOT {
+            // An approach looking ahead for itself is its own root: its coordinates, as
+            // `lookaheadRoot.outerCoordinator`.
+            return placement
+                .own_coordinates()
+                .read_lookahead(|tree, node, _| {
+                    let mut current = Some(node);
+                    while let Some(at) = current {
+                        let value = tree.node(at);
+                        if value.lookahead.as_ref().is_some_and(|state| state.scope == OWN_ROOT) {
+                            return Some(tree.coordinates_of_layer(at, 0));
+                        }
+                        current = value.parent;
+                    }
+                    None
+                })
+                .flatten();
+        }
         placement.lookahead_scope_coordinates(self.id)
     }
 
@@ -607,6 +625,22 @@ impl ApproachMeasureScope<'_, '_> {
     /// What it was measured with ahead, as `lookaheadConstraints`.
     pub fn lookahead_constraints(&self) -> Constraints {
         self.lookahead_constraints
+    }
+
+    /// The scope it's measured ahead in, as the `LookaheadScope` an `ApproachMeasureScope` is:
+    /// the one it's in where it is now (moved content included), or, out of any, its own.
+    pub fn lookahead_scope(&self) -> LookaheadScope {
+        let tree = &*self.scope.base.tree;
+        let mut current = Some(self.scope.base.node);
+        while let Some(node) = current {
+            let value = tree.node(node);
+            match value.lookahead.as_ref().map(|state| state.scope) {
+                Some(0) => current = value.parent,
+                Some(id) => return LookaheadScope { id },
+                None => break,
+            }
+        }
+        LookaheadScope { id: OWN_ROOT }
     }
 
     /// Measures its content; the approach over, with what it was measured with ahead, whatever
