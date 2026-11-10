@@ -79,6 +79,7 @@ mod review_pwl;
 mod review_retained;
 mod review_shared_elements_2;
 mod review_shared_elements_3;
+mod review_w2_layout_scheduler;
 mod root_node_layout;
 mod rulers;
 mod shadow_values;
