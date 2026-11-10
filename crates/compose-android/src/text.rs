@@ -782,7 +782,7 @@ fn encode_request(
     let (min_width, max_width) = width_bounds(constraints);
     out.u32(min_width as u32);
     out.u32(max_width as u32);
-    encode_style(out, style, paragraph_paint_flags(style), Color::TRANSPARENT, density, fonts);
+    encode_style(out, style, paragraph_paint_flags(style), style.background, density, fonts);
     out.u32(runs.len() as u32);
     for (range, run_style, background) in runs {
         out.u32(utf16_index(text, range.start) as u32);
@@ -1550,5 +1550,68 @@ mod tests {
         let requests = &measurer.backend.requests;
         assert_eq!(requests[0][0], 1, "soft wrap, to be drawn");
         assert_eq!(requests[1][0], 0b11, "soft wrap, for a probe only");
+    }
+
+    #[test]
+    fn a_paragraph_s_background_is_encoded_on_the_base_style_and_inherited_runs() {
+        let blue = Color::from_argb(0x1234_5678);
+        let style = TextStyle { background: blue, ..TextStyle::DEFAULT };
+        let request = request_of(&style);
+        assert_eq!(u32_at(&request, PLAIN_REQUEST - 12), blue.to_argb());
+        assert_eq!(u32_at(&request_of(&TextStyle::DEFAULT), PLAIN_REQUEST - 12), 0);
+
+        let spanned = AnnotatedString::build(|builder| {
+            builder.with_style(
+                compose_ui::SpanStyle {
+                    font_weight: Some(compose_ui::FontWeight::BOLD),
+                    ..compose_ui::SpanStyle::DEFAULT
+                },
+                |builder| {
+                    builder.append("ab");
+                },
+            );
+            builder.append("cd");
+        });
+        let runs = paint_free_runs(&spanned, &style);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].2, blue);
+        assert_eq!(runs[1].2, blue);
+    }
+
+    // Review of D2180: a span's transparent background clears the text style's on its run, as
+    // Compose's `BackgroundColorSpan(0)` leaves Android's `bgColor` 0; a resolved style's
+    // transparent background sends none (Kotlin sets no span for 0).
+    #[test]
+    fn review_a_transparent_span_background_sends_none_for_its_run() {
+        let blue = Color::from_argb(0xFF00_00FF);
+        let style = TextStyle { background: blue, ..TextStyle::DEFAULT };
+        let spanned = AnnotatedString::build(|builder| {
+            builder.with_style(
+                compose_ui::SpanStyle {
+                    background: Color::TRANSPARENT,
+                    ..compose_ui::SpanStyle::DEFAULT
+                },
+                |builder| {
+                    builder.append("ab");
+                },
+            );
+            builder.append("cd");
+        });
+        let mut measurer = AndroidTextMeasurer::new(Fake::default());
+        measurer.layout_annotated(
+            &spanned,
+            &style,
+            TextLayoutOptions::default(),
+            Constraints::unbounded(),
+            &Density::new(1.0),
+        );
+        let request = measurer.backend.requests.remove(0);
+        // The base style's background, then two runs, each ending with its background.
+        assert_eq!(u32_at(&request, PLAIN_REQUEST - 12), blue.to_argb());
+        let runs = paint_free_runs(&spanned, &style);
+        assert_eq!(runs.iter().map(|run| run.2).collect::<Vec<_>>(), [Color::TRANSPARENT, blue]);
+        let resolved =
+            TextStyle::resolve_defaults(&TextStyle::DEFAULT, compose_ui::LayoutDirection::Ltr);
+        assert_eq!(u32_at(&request_of(&resolved), PLAIN_REQUEST - 12), 0);
     }
 }

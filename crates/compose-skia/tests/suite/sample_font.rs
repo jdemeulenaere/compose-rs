@@ -493,3 +493,298 @@ fn the_boxes_of_a_range_are_the_same_on_each_stack() {
         assert!(array.chunks(4).all(|b| b[2] - b[0] == FONT_SIZE), "{stack}: {array:?}");
     });
 }
+
+fn annotated_on_each_stack(
+    text: &compose::ui::AnnotatedString,
+    base_size: f32,
+    options: TextLayoutOptions,
+    width: f32,
+    height: Option<f32>,
+    check: impl Fn(&str, &dyn Paragraph),
+) {
+    let style = TextStyle {
+        font_size: base_size.sp(),
+        font_family: Some(basic_measure_font().to_font_family()),
+        text_direction: Some(TextDirection::Content),
+        ..TextStyle::DEFAULT
+    };
+    let max_height = height.map_or(Constraints::INFINITY, |h| h.ceil() as i32);
+    let width = width.ceil() as i32;
+    let constraints = Constraints::new(width, width, 0, max_height);
+    let density = Density::new(1.0);
+    let mut fixed = FixedTextMeasurer::with_metrics(FixedFontMetrics::SAMPLE_FONT);
+    let fixed_handle = fixed.layout_annotated(text, &style, options, constraints, &density);
+    let fixed_paragraph = fixed.paragraph(fixed_handle);
+    fixed.release(fixed_handle);
+    check("the fixed measurer", &*fixed_paragraph);
+
+    let mut skia = SkiaTextMeasurer::new();
+    let skia_handle = skia.layout_annotated(text, &style, options, constraints, &density);
+    let skia_paragraph = skia.paragraph(skia_handle);
+    skia.release(skia_handle);
+    check("SkParagraph", &*skia_paragraph);
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testEllipsis_withMaxLineEqualsNull_doesNotEllipsis
+#[test]
+fn an_ellipsis_with_unbounded_maximum_lines_wraps_without_ellipsizing() {
+    let options = ellipsized(TextOverflow::Ellipsis, u32::MAX);
+    on_each_stack("abc", options, 2.0 * FONT_SIZE, |stack, paragraph| {
+        assert_eq!(paragraph.line_count(), 2, "{stack}");
+        for line in 0..paragraph.line_count() {
+            assert!(!paragraph.is_line_ellipsized(line), "{stack}: {line}");
+        }
+    });
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testEllipsis_withMaxLinesLessThanTextLines_doesEllipsis
+#[test]
+fn an_ellipsis_with_fewer_maximum_lines_than_the_text_needs_ellipsizes() {
+    let options = ellipsized(TextOverflow::Ellipsis, 1);
+    on_each_stack("abcde", options, 3.5 * FONT_SIZE, |stack, paragraph| {
+        assert_eq!(paragraph.line_count(), 1, "{stack}");
+        assert!(paragraph.is_line_ellipsized(0), "{stack}");
+    });
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testEllipsis_withMaxLinesMoreThanTextLines_doesNotEllipsis
+#[test]
+fn an_ellipsis_with_enough_maximum_lines_for_the_text_does_not_ellipsize() {
+    let options = ellipsized(TextOverflow::Ellipsis, 2);
+    on_each_stack("abc", options, 2.0 * FONT_SIZE, |stack, paragraph| {
+        assert_eq!(paragraph.line_count(), 2, "{stack}");
+        for line in 0..paragraph.line_count() {
+            assert!(!paragraph.is_line_ellipsized(line), "{stack}: {line}");
+        }
+    });
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testEllipsis_withSpans_withLimitedHeight_doesEllipsis
+#[test]
+fn a_taller_span_cuts_an_ellipsized_paragraph_at_its_height_earlier() {
+    use compose::ui::{AnnotatedRange, AnnotatedString, SpanStyle};
+    let larger = SpanStyle { font_size: 60.0.sp(), ..SpanStyle::DEFAULT };
+    let text = AnnotatedString::with_styles(
+        THIS_IS_A_TEXT.to_string(),
+        [AnnotatedRange::new(larger, 0, 2)],
+        [],
+    );
+    let options = ellipsized(TextOverflow::Ellipsis, u32::MAX);
+    annotated_on_each_stack(&text, 30.0, options, 120.0, Some(66.0), |stack, paragraph| {
+        assert_eq!(paragraph.line_count(), 1, "{stack}");
+        assert!(paragraph.is_line_ellipsized(0), "{stack}");
+    });
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setFontSizeOnWholeText
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setFontSizeOnPartText
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setFontSizeTwice_lastOneOverwrite
+#[test]
+fn span_font_sizes_in_sp_size_their_ranges_with_later_spans_winning() {
+    use compose::ui::{AnnotatedRange, AnnotatedString, SpanStyle};
+    let size_span = |sp: f32| SpanStyle { font_size: sp.sp(), ..SpanStyle::DEFAULT };
+
+    let whole = AnnotatedString::with_styles(
+        "abcde".to_string(),
+        [AnnotatedRange::new(size_span(20.0), 0, 5)],
+        [],
+    );
+    annotated_on_each_stack(
+        &whole,
+        50.0,
+        TextLayoutOptions::default(),
+        100.0,
+        None,
+        |stack, paragraph| {
+            assert_eq!(paragraph.max_intrinsic_width(), 100.0, "{stack}");
+            for index in 0..5 {
+                assert_eq!(paragraph.get_bounding_box(index).width(), 20.0, "{stack}: {index}");
+            }
+        },
+    );
+
+    let part = AnnotatedString::with_styles(
+        "abcde".to_string(),
+        [AnnotatedRange::new(size_span(20.0), 0, 3)],
+        [],
+    );
+    annotated_on_each_stack(
+        &part,
+        50.0,
+        TextLayoutOptions::default(),
+        200.0,
+        None,
+        |stack, paragraph| {
+            assert_eq!(paragraph.max_intrinsic_width(), 160.0, "{stack}");
+            assert_eq!(paragraph.get_bounding_box(0).width(), 20.0, "{stack}");
+            assert_eq!(paragraph.get_bounding_box(3).width(), 50.0, "{stack}");
+        },
+    );
+
+    let overwritten = AnnotatedString::with_styles(
+        "abcde".to_string(),
+        [AnnotatedRange::new(size_span(20.0), 0, 5), AnnotatedRange::new(size_span(30.0), 0, 3)],
+        [],
+    );
+    annotated_on_each_stack(
+        &overwritten,
+        50.0,
+        TextLayoutOptions::default(),
+        200.0,
+        None,
+        |stack, paragraph| {
+            assert_eq!(paragraph.max_intrinsic_width(), 130.0, "{stack}");
+            assert_eq!(paragraph.get_bounding_box(0).width(), 30.0, "{stack}");
+            assert_eq!(paragraph.get_bounding_box(3).width(), 20.0, "{stack}");
+        },
+    );
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setFontSizeScaleOnWholeText
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setFontSizeScaleOnPartText
+#[test]
+fn span_font_sizes_in_em_scale_the_paragraph_size_on_their_ranges() {
+    use compose::ui::{AnnotatedRange, AnnotatedString, SpanStyle};
+    let double = SpanStyle { font_size: 2.0.em(), ..SpanStyle::DEFAULT };
+
+    let whole = AnnotatedString::with_styles(
+        "abcde".to_string(),
+        [AnnotatedRange::new(double.clone(), 0, 5)],
+        [],
+    );
+    annotated_on_each_stack(
+        &whole,
+        20.0,
+        TextLayoutOptions::default(),
+        300.0,
+        None,
+        |stack, paragraph| {
+            assert_eq!(paragraph.max_intrinsic_width(), 200.0, "{stack}");
+            assert_eq!(paragraph.get_bounding_box(0).width(), 40.0, "{stack}");
+        },
+    );
+
+    let part =
+        AnnotatedString::with_styles("abcde".to_string(), [AnnotatedRange::new(double, 0, 3)], []);
+    annotated_on_each_stack(
+        &part,
+        20.0,
+        TextLayoutOptions::default(),
+        300.0,
+        None,
+        |stack, paragraph| {
+            assert_eq!(paragraph.max_intrinsic_width(), 160.0, "{stack}");
+            assert_eq!(paragraph.get_bounding_box(0).width(), 40.0, "{stack}");
+            assert_eq!(paragraph.get_bounding_box(3).width(), 20.0, "{stack}");
+        },
+    );
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setLetterSpacingOnWholeText
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setLetterSpacingOnPartText
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setLetterSpacingTwice_lastOneOverwrite
+#[test]
+fn span_letter_spacing_in_em_widens_its_range_with_later_spans_winning() {
+    use compose::ui::{AnnotatedRange, AnnotatedString, SpanStyle};
+    let spaced = |ems: f32| SpanStyle { letter_spacing: ems.em(), ..SpanStyle::DEFAULT };
+
+    let whole = AnnotatedString::with_styles(
+        "abcde".to_string(),
+        [AnnotatedRange::new(spaced(2.0), 0, 5)],
+        [],
+    );
+    annotated_on_each_stack(
+        &whole,
+        20.0,
+        TextLayoutOptions::default(),
+        400.0,
+        None,
+        |stack, paragraph| {
+            assert_eq!(paragraph.max_intrinsic_width(), 300.0, "{stack}");
+        },
+    );
+
+    let part = AnnotatedString::with_styles(
+        "abcde".to_string(),
+        [AnnotatedRange::new(spaced(2.0), 0, 3)],
+        [],
+    );
+    annotated_on_each_stack(
+        &part,
+        20.0,
+        TextLayoutOptions::default(),
+        400.0,
+        None,
+        |stack, paragraph| {
+            assert_eq!(paragraph.max_intrinsic_width(), 220.0, "{stack}");
+        },
+    );
+
+    let overwritten = AnnotatedString::with_styles(
+        "abcde".to_string(),
+        [AnnotatedRange::new(spaced(2.0), 0, 5), AnnotatedRange::new(spaced(3.0), 0, 3)],
+        [],
+    );
+    annotated_on_each_stack(
+        &overwritten,
+        20.0,
+        TextLayoutOptions::default(),
+        500.0,
+        None,
+        |stack, paragraph| {
+            assert_eq!(paragraph.max_intrinsic_width(), 360.0, "{stack}");
+        },
+    );
+}
+
+/// `check` of `text` in `style` at 20 sp, unbounded, on each stack.
+fn styled_on_each_stack(
+    text: &compose::ui::AnnotatedString,
+    style: TextStyle,
+    check: impl Fn(&str, &dyn Paragraph),
+) {
+    let style = TextStyle { font_size: 20.0.sp(), ..style };
+    let mut fixed = FixedTextMeasurer::with_metrics(FixedFontMetrics::SAMPLE_FONT);
+    let mut skia = SkiaTextMeasurer::new();
+    let stacks: [(&str, &mut dyn TextMeasurer); 2] =
+        [("the fixed measurer", &mut fixed), ("SkParagraph", &mut skia)];
+    for (stack, measurer) in stacks {
+        let handle = measurer.layout_annotated(
+            text,
+            &style,
+            TextLayoutOptions::default(),
+            Constraints::unbounded(),
+            &Density::new(1.0),
+        );
+        let paragraph = measurer.paragraph(handle);
+        measurer.release(handle);
+        check(stack, &*paragraph);
+    }
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testTextStyle_letterSpacingInEm_appliedOnTextPaint
+#[test]
+fn a_paragraph_s_letter_spacing_in_em_widens_each_letter_by_its_size() {
+    let spaced = TextStyle { letter_spacing: 2.0.em(), ..style() };
+    styled_on_each_stack(&"abc".into(), spaced, |stack, paragraph| {
+        assert_eq!(paragraph.max_intrinsic_width(), 180.0, "{stack}");
+        assert_eq!(paragraph.get_bounding_box(1).width(), 60.0, "{stack}");
+    });
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testTextStyle_letterSpacingInSp_appliedAsSpan
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testTextStyle_letterSpacingInSp_noSpan_whenNoAnnoattions
+#[test]
+fn a_paragraph_s_letter_spacing_in_sp_spaces_its_text_with_or_without_spans() {
+    use compose::ui::{AnnotatedRange, AnnotatedString, FontWeight, SpanStyle};
+    let spaced = TextStyle { letter_spacing: 5.0.sp(), ..style() };
+    let heavy = SpanStyle { font_weight: Some(FontWeight::W800), ..SpanStyle::DEFAULT };
+    let spanned =
+        AnnotatedString::with_styles("abc".to_string(), [AnnotatedRange::new(heavy, 0, 3)], []);
+    for text in [spanned, "abc".into()] {
+        styled_on_each_stack(&text, spaced.clone(), |stack, paragraph| {
+            assert_eq!(paragraph.max_intrinsic_width(), 75.0, "{stack}: {text:?}");
+            assert_eq!(paragraph.get_bounding_box(1).width(), 25.0, "{stack}: {text:?}");
+        });
+    }
+}

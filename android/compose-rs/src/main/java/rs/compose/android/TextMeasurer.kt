@@ -604,10 +604,19 @@ internal class TextMeasurer(
         val runCount = request.getInt()
         var letterSpaced = paint.letterSpacing != 0f
         var runBrush = false
-        val content: CharSequence = if (runCount == 0 && !hasPlaceholders) {
+        val baseBackground = base.background != 0 && text.isNotEmpty()
+        val content: CharSequence = if (runCount == 0 && !hasPlaceholders && !baseBackground) {
             text
         } else {
             val spannable = SpannableString(text)
+            if (runCount == 0 && baseBackground) {
+                spannable.setSpan(
+                    BackgroundColorSpan(base.background),
+                    0,
+                    text.length,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
+            }
             repeat(runCount) {
                 val start = request.getInt()
                 val end = request.getInt()
