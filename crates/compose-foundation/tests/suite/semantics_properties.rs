@@ -1218,9 +1218,12 @@ fn changed_semantics_do_not_compose_the_content_below_again() {
     });
     ui.on_node_with_tag("tag").assert_content_description_equals(&["before"]);
     assert_eq!(compositions.get(), 1);
+    // Not Compose's: the tagged node keeps its identity too.
+    let id = ui.on_node_with_tag("tag").fetch_semantics_node().id();
     ui.run_on_idle(|_| after.set(true));
     ui.on_node_with_tag("tag").assert_content_description_equals(&["after"]);
     assert_eq!(compositions.get(), 1);
+    assert_eq!(ui.on_node_with_tag("tag").fetch_semantics_node().id(), id);
 }
 
 /// Compose's `SimpleTestLayout { content() }`, as its own composable function.
@@ -1239,8 +1242,12 @@ fn unchanged_semantics_do_not_measure_again() {
     let handle = forcer.handle();
     let measures = Rc::new(Cell::new(0));
     let counted = measures.clone();
+    // Not Compose's: the content is composed again, so the count below isn't vacuous.
+    let compositions = Rc::new(Cell::new(0));
+    let composed = compositions.clone();
     let mut ui = compose_test(move || {
         handle.get();
+        composed.set(composed.get() + 1);
         let counted = counted.clone();
         // Compose's `CountingLayout`: a remembered policy counting its measurements.
         let policy = remember(move || {
@@ -1259,6 +1266,7 @@ fn unchanged_semantics_do_not_measure_again() {
     ui.run_on_idle(|_| assert_eq!(measures.get(), 1));
     ui.run_on_idle(|_| forcer.set(forcer.get() + 1));
     ui.run_on_idle(|_| assert_eq!(measures.get(), 1));
+    assert_eq!(compositions.get(), 2, "the forcer composes the content again");
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/semantics/SemanticsTests.kt, testSemanticsCalculatedOncePerComposition
@@ -1476,7 +1484,11 @@ fn movable_content_moved_is_under_its_new_parent() {
 fn a_texts_layout_result_has_its_density_and_font_size() {
     let density = Rc::new(Cell::new(None));
     let seen = density.clone();
-    let mut ui = compose_test(move || {
+    // A device's density, as Compose's test runs at: at compose-rs's default of 1, a layout
+    // input with the default density would pass.
+    let root_density = compose_ui::Density::new(2.625);
+    let measurer = Box::new(compose_ui::platform::FixedTextMeasurer::new());
+    let mut ui = compose_test_with(DEFAULT_SIZE, root_density, measurer, move || {
         seen.set(Some(compose_ui::LOCAL_DENSITY.current()));
         let style = compose_ui::TextStyle { font_size: 14.sp(), ..compose_ui::TextStyle::DEFAULT };
         BasicText!("hello", modifier = Modifier.test_tag("tag"), style = style);
@@ -1487,6 +1499,7 @@ fn a_texts_layout_result_has_its_density_and_font_size() {
             assert!(get(&mut results))
         });
     let input = &results[0].layout_input;
+    assert_eq!(density.get(), Some(root_density));
     assert_eq!(Some(input.density), density.get());
     assert_eq!(input.style.font_size.value(), 14.0);
 }

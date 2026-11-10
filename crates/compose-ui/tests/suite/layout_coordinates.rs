@@ -1841,32 +1841,44 @@ fn scaled_siblings_transform_both_ways_in_a_matrix() {
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/node/LayoutNodeTest.kt, coordinatesAttachedWhenLayoutNodeAttached
 #[test]
 fn a_node_s_coordinates_are_attached_while_it_is() {
-    let (shown, coordinates) = (mutable_state_of(true), told());
-    let (s, c) = (shown.handle(), coordinates.clone());
+    // Compose asks the node's coordinates before it's attached too: a composed node always is.
+    let (shown, outer, inner) = (mutable_state_of(true), told(), told());
+    let (s, o, i) = (shown.handle(), outer.clone(), inner.clone());
     let mut host = host(move || {
         if s.get() {
-            Leaf(Modifier.graphics_layer(|_| {}).then(keep(&c)).then(sized(10)));
+            Leaf(keep(&o).then(Modifier.graphics_layer(|_| {})).then(sized(10)).then(keep(&i)));
         }
     });
-    let coordinates = of(&coordinates);
-    assert!(coordinates.is_attached());
+    let (outer, inner) = (of(&outer), of(&inner));
+    assert!(outer.is_attached() && inner.is_attached());
     shown.set(false);
     host.frame();
-    assert!(!coordinates.is_attached());
+    assert!(!outer.is_attached());
+    assert!(!inner.is_attached());
 }
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/node/LayoutNodeTest.kt, nodeCoordinatorParentLayoutCoordinates
 #[test]
 fn a_child_s_coordinates_have_its_parent_s_inner_ones_as_parent_layout() {
-    let (parent, outer, inner) = (told(), told(), told());
-    let (p, o, i) = (parent.clone(), outer.clone(), inner.clone());
+    // The parent's and the child's inner coordinates are those after all of their modifiers; the
+    // child's outer ones those before its graphics layer, and a modifier's in between.
+    let (parent, outer, layered, inner) = (told(), told(), told(), told());
+    let (p, o, l, i) = (parent.clone(), outer.clone(), layered.clone(), inner.clone());
     let _host = host(move || {
-        let (o, i) = (o.clone(), i.clone());
+        let (o, l, i) = (o.clone(), l.clone(), i.clone());
         Stack!(modifier = sized(20).then(keep(&p)), {
-            Leaf(keep(&o).then(Modifier.graphics_layer(|_| {})).then(keep(&i)).then(sized(10)));
+            Leaf(
+                keep(&o)
+                    .then(Modifier.graphics_layer(|_| {}))
+                    .then(keep(&l))
+                    .then(sized(10))
+                    .then(keep(&i)),
+            );
         });
     });
-    let (parent, outer, inner) = (of(&parent), of(&outer), of(&inner));
+    let (parent, outer, layered, inner) = (of(&parent), of(&outer), of(&layered), of(&inner));
+    assert_ne!(outer, inner, "a graphics layer has coordinates of its own");
     assert_eq!(inner.parent_layout_coordinates(), Some(parent));
+    assert_eq!(layered.parent_layout_coordinates(), Some(parent));
     assert_eq!(outer.parent_layout_coordinates(), Some(parent));
 }

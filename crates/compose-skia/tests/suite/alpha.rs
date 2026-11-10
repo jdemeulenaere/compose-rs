@@ -109,7 +109,10 @@ fn switch_from_half_alpha_to_full() {
         let modifier = background(Modifier, Color::WHITE).alpha(a.get());
         at_least_size(10, background(modifier, Color::GREEN));
     });
-    ui.wait_for_idle();
+    // Half green over white first, so the switch is what makes it green.
+    let before = take_screenshot(&mut ui, 10, 10);
+    assert_ne!(before.pixel(5, 5), Color::GREEN);
+    assert_ne!(before.pixel(5, 5), Color::WHITE);
     alpha.set(1.0);
     assert_rect(&take_screenshot(&mut ui, 10, 10), Color::GREEN);
 }
@@ -123,7 +126,7 @@ fn switch_from_zero_alpha_to_full_with_nested_repaint_boundaries() {
         let modifier = background(Modifier, Color::WHITE).alpha(1.0).alpha(a.get());
         at_least_size(10, background(modifier, Color::GREEN));
     });
-    ui.wait_for_idle();
+    assert_rect(&take_screenshot(&mut ui, 10, 10), Color::WHITE);
     alpha.set(1.0);
     assert_rect(&take_screenshot(&mut ui, 10, 10), Color::GREEN);
 }

@@ -171,14 +171,14 @@ fn validate_square_colors(ui: &mut ComposeTestRule, outer: Color, inner: Color, 
     });
 }
 
-/// The test's `composeSquares`: the outer color padding the inner one's square.
+/// The test's `composeSquares`: the outer color padding the inner one's square. The modifiers
+/// are made once, outside the content, so a color changing draws again only by the state its
+/// draw read (a modifier made again in a composition would draw anew whatever it read).
 fn compose_squares(model: &SquareModel) -> ComposeTestRule {
-    let model = model.clone();
-    rule(model.size * 3, move || {
-        let model = model.clone();
-        Padding(model.size, model.fill(false), move || {
-            AtLeastSize(model.size, model.fill(true), || {});
-        });
+    let (size, outer, inner) = (model.size, model.fill(false), model.fill(true));
+    rule(size * 3, move || {
+        let inner = inner.clone();
+        Padding(size, outer.clone(), move || AtLeastSize(size, inner.clone(), || {}));
     })
 }
 
@@ -424,12 +424,11 @@ fn draw_modifier_test_layout_direction() {
 #[test]
 fn draw_modifier_model_changes_on_root() {
     let model = SquareModel::new(10, GREEN, Color::WHITE);
-    let m = model.clone();
+    // Made once, so only the state the draw read draws the change.
+    let (outer, inner) = (model.fill(false), padding(10).then(model.fill(true)));
     let mut ui = rule(30, move || {
-        let m = m.clone();
-        FixedSize(30, m.fill(false), move || {
-            FixedSize(10, padding(10).then(m.fill(true)), || {});
-        });
+        let inner = inner.clone();
+        FixedSize(30, outer.clone(), move || FixedSize(10, inner.clone(), || {}));
     });
     validate_square_colors(&mut ui, GREEN, Color::WHITE, 10);
     model.inner.set(YELLOW);
@@ -440,13 +439,14 @@ fn draw_modifier_model_changes_on_root() {
 #[test]
 fn draw_modifier_model_changes_on_repaint_boundary() {
     let model = SquareModel::new(10, GREEN, Color::WHITE);
-    let m = model.clone();
+    // Made once, so only the state the draw read draws the change.
+    let (outer, inner) = (
+        background(GREEN),
+        Modifier.graphics_layer(|_| {}).then(padding(10)).then(model.fill(true)),
+    );
     let mut ui = rule(30, move || {
-        let m = m.clone();
-        FixedSize(30, background(GREEN), move || {
-            let modifier = Modifier.graphics_layer(|_| {}).then(padding(10)).then(m.fill(true));
-            FixedSize(10, modifier, || {});
-        });
+        let inner = inner.clone();
+        FixedSize(30, outer.clone(), move || FixedSize(10, inner.clone(), || {}));
     });
     validate_square_colors(&mut ui, GREEN, Color::WHITE, 10);
     model.inner.set(YELLOW);
@@ -598,8 +598,9 @@ impl DrawModifierNode for LayoutAndDrawNode {
     }
 }
 
-/// The node's draw is in its own (inner) coordinates: the 10 × 10 middle, as Compose's
-/// `LayoutModifier` and `DrawModifier` in one draws in the coordinates the layout gives.
+/// The node's draw is in its content's coordinates: the 10 × 10 middle, as Compose's
+/// `LayoutModifier` and `DrawModifier` in one draws in the coordinates its layout gives its
+/// content (compose-rs draws it over its own 30 × 30, white at (0, 0)).
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/DrawModifierTest.kt, modifier_combinedModifiers
 #[test]
 #[ignore = "a layout and draw node draws in its own coordinates, not its content's (D1341)"]

@@ -47,6 +47,9 @@ fn test_round_rect_outline_equality() {
     let outline = Outline::Rounded(Rect::new(5.0, 10.0, 15.0, 20.0), [7.0; 4]);
     assert_eq!(outline, Outline::Rounded(Rect::new(5.0, 10.0, 15.0, 20.0), [7.0; 4]));
     assert_ne!(outline, Outline::Rounded(Rect::new(20.0, 15.0, 10.0, 5.0), [3.0; 4]));
+    // Each half alone makes them differ.
+    assert_ne!(outline, Outline::Rounded(Rect::new(5.0, 10.0, 15.0, 20.0), [3.0; 4]));
+    assert_ne!(outline, Outline::Rounded(Rect::new(20.0, 15.0, 10.0, 5.0), [7.0; 4]));
 }
 
 // Compose: compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/OutlineTest.kt, testPathOutlineEquality
@@ -59,6 +62,7 @@ fn test_path_outline_equality() {
     let outline = Outline::generic(&path);
     assert_eq!(outline, outline.clone());
     assert_eq!(outline, Outline::generic(&path));
+    assert_eq!(outline, Outline::generic(&triangle()), "distinct path with the same contents");
     path.line_to(50.0, 50.0);
     let changed = Outline::generic(&path);
     assert_ne!(outline, changed);

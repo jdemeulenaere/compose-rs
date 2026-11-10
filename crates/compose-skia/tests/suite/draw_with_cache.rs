@@ -75,25 +75,26 @@ fn assert_pixels(image: &CapturedImage, color: Color, at: &[(i32, i32)]) {
 fn test_layout_direction_change_invalidates_draw_with_cache() {
     let resolved = Rc::new(Cell::new(None));
     let drawn = Rc::new(Cell::new(None));
-    let (r, d) = (resolved.clone(), drawn.clone());
+    let provided = mutable_state_of(LayoutDirection::Ltr);
+    let (r, d, p) = (resolved.clone(), drawn.clone(), provided.handle());
+    // Compose's `Button` with a `Text`: a clickable leaf drawing with a cache. Its modifier is
+    // made once, so only the direction changing builds the cache again (not a new element).
+    let toggle = move || {
+        p.set(match p.get() {
+            LayoutDirection::Ltr => LayoutDirection::Rtl,
+            LayoutDirection::Rtl => LayoutDirection::Ltr,
+        })
+    };
+    let cached = Modifier.draw_with_cache(move |cache| {
+        r.set(Some(cache.layout_direction()));
+        let d = d.clone();
+        cache.on_draw_behind(move |scope| d.set(Some(scope.layout_direction())))
+    });
+    let modifier = Modifier.test_tag(TAG).clickable(toggle).then(cached);
     let mut ui = rule(200, move || {
-        let (r, d) = (r.clone(), d.clone());
-        let provided = remember(|| mutable_state_of(LayoutDirection::Ltr));
-        CompositionLocalProvider(LOCAL_LAYOUT_DIRECTION.provides(provided.get()), move || {
-            let (r, d) = (r.clone(), d.clone());
-            let toggle = move || {
-                provided.set(match provided.get() {
-                    LayoutDirection::Ltr => LayoutDirection::Rtl,
-                    LayoutDirection::Rtl => LayoutDirection::Ltr,
-                })
-            };
-            // Compose's `Button` with a `Text`: a clickable leaf drawing with a cache.
-            let cached = Modifier.draw_with_cache(move |cache| {
-                r.set(Some(cache.layout_direction()));
-                let d = d.clone();
-                cache.on_draw_behind(move |scope| d.set(Some(scope.layout_direction())))
-            });
-            at_least_size(50, Modifier.test_tag(TAG).clickable(toggle).then(cached));
+        let modifier = modifier.clone();
+        CompositionLocalProvider(LOCAL_LAYOUT_DIRECTION.provides(p.get()), move || {
+            at_least_size(50, modifier.clone());
         });
     });
     ui.wait_for_idle();
@@ -114,29 +115,36 @@ fn test_layout_direction_change_invalidates_draw_with_cache() {
 fn test_density_change_invalidates_draw_with_cache() {
     let resolved = Rc::new(Cell::new(None));
     let drawn = Rc::new(Cell::new(None));
-    let (r, d) = (resolved.clone(), drawn.clone());
+    let provided = mutable_state_of(Density::with_font_scale(2.0, 2.0));
+    let (r, d, p) = (resolved.clone(), drawn.clone(), provided.handle());
+    // Made once, so only the density changing builds the cache again (not a new element).
+    let toggle = move || {
+        let next = if p.get().density == 2.0 { 3.0 } else { 2.0 };
+        p.set(Density::with_font_scale(next, next));
+    };
+    let cached = Modifier.draw_with_cache(move |cache| {
+        r.set(Some(cache.density()));
+        let d = d.clone();
+        cache.on_draw_behind(move |scope| d.set(Some(scope.density())))
+    });
+    let modifier = Modifier.test_tag(TAG).clickable(toggle).then(cached);
     let mut ui = rule(200, move || {
-        let (r, d) = (r.clone(), d.clone());
-        let provided = remember(|| mutable_state_of(Density::new(2.0)));
-        CompositionLocalProvider(LOCAL_DENSITY.provides(provided.get()), move || {
-            let (r, d) = (r.clone(), d.clone());
-            let toggle = move || {
-                let next = if provided.get().density == 2.0 { 3.0 } else { 2.0 };
-                provided.set(Density::new(next));
-            };
-            let cached = Modifier.draw_with_cache(move |cache| {
-                r.set(Some(cache.density()));
-                let d = d.clone();
-                cache.on_draw_behind(move |scope| d.set(Some(scope.density())))
-            });
-            at_least_size(50, Modifier.test_tag(TAG).clickable(toggle).then(cached));
+        let modifier = modifier.clone();
+        CompositionLocalProvider(LOCAL_DENSITY.provides(p.get()), move || {
+            at_least_size(50, modifier.clone());
         });
     });
     ui.wait_for_idle();
-    assert_eq!((resolved.get(), drawn.get()), (Some(Density::new(2.0)), Some(Density::new(2.0))));
+    assert_eq!(
+        (resolved.get(), drawn.get()),
+        (Some(Density::with_font_scale(2.0, 2.0)), Some(Density::with_font_scale(2.0, 2.0)))
+    );
     ui.on_node_with_tag(TAG).perform_click();
     ui.wait_for_idle();
-    assert_eq!((resolved.get(), drawn.get()), (Some(Density::new(3.0)), Some(Density::new(3.0))));
+    assert_eq!(
+        (resolved.get(), drawn.get()),
+        (Some(Density::with_font_scale(3.0, 3.0)), Some(Density::with_font_scale(3.0, 3.0)))
+    );
 }
 
 /// A state read while drawing (the rectangle's color) draws again without building the cache
@@ -279,17 +287,17 @@ fn test_cache_invalidated_after_size_change() {
     let builds = Count::default();
     let b = builds.clone();
     let (start, end) = (200, 400);
-    let mut ui = rule(400, move || {
-        let b = b.clone();
-        let size = remember(|| mutable_state_of(start));
-        let cached = Modifier.draw_with_cache(move |cache| {
-            let path = square_path(cache.size());
-            bump(&b);
-            cache.on_draw_behind(move |scope| scope.draw_path(&path, Paint::fill(Color::RED)))
-        });
-        let toggle = move || size.set(if size.get() == start { end } else { start });
-        at_least_size(size.get(), Modifier.test_tag(TAG).then(cached).clickable(toggle));
+    let size = mutable_state_of(start);
+    let s = size.handle();
+    // Made once, so only the new size builds the cache again (not a new element).
+    let cached = Modifier.draw_with_cache(move |cache| {
+        let path = square_path(cache.size());
+        bump(&b);
+        cache.on_draw_behind(move |scope| scope.draw_path(&path, Paint::fill(Color::RED)))
     });
+    let toggle = move || s.set(if s.get() == start { end } else { start });
+    let modifier = Modifier.test_tag(TAG).then(cached).clickable(toggle);
+    let mut ui = rule(400, move || at_least_size(s.get(), modifier.clone()));
     let image = capture(&mut ui);
     assert_eq!(builds.get(), 1);
     assert_eq!(image.size(), IntSize::new(start, start));
@@ -307,17 +315,15 @@ fn test_cache_invalidated_after_layout_direction_change() {
     let direction = mutable_state_of(LayoutDirection::Ltr);
     let real = Rc::new(Cell::new(None));
     let (d, r) = (direction.handle(), real.clone());
+    // Made once, so only the direction changing builds the cache again (not a new element).
+    let cached = Modifier.draw_with_cache(move |cache| {
+        r.set(Some(cache.layout_direction()));
+        cache.on_draw_behind(|_| {})
+    });
     let mut ui = rule(100, move || {
-        let r = r.clone();
+        let cached = cached.clone();
         CompositionLocalProvider(LOCAL_LAYOUT_DIRECTION.provides(d.get()), move || {
-            let r = r.clone();
-            at_least_size(
-                10,
-                Modifier.draw_with_cache(move |cache| {
-                    r.set(Some(cache.layout_direction()));
-                    cache.on_draw_behind(|_| {})
-                }),
-            );
+            at_least_size(10, cached.clone());
         });
     });
     ui.wait_for_idle();
@@ -459,4 +465,55 @@ fn recomposition_with_the_same_draw_with_cache_lambda_is_not_triggering_redraw()
     });
     assert_eq!(recomposed_with(modifier, &draws), (1, 1));
     assert_eq!(builds.get(), 1);
+}
+
+/// A state read building the cache of a node with a layer, the state set by another node: the
+/// cache is built again.
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/DrawModifierTest.kt, testGraphicsLayerCacheInvalidatedAfterStateChange
+#[test]
+fn test_graphics_layer_cache_invalidated_after_state_change() {
+    let builds = Count::default();
+    let b = builds.clone();
+    let mut ui = rule(200, move || {
+        let b = b.clone();
+        let flag = remember(|| mutable_state_of(false));
+        let cached =
+            Modifier.test_tag("boxTag").graphics_layer(|_| {}).draw_with_cache(move |cache| {
+                let color = if flag.get() { Color::RED } else { Color::BLUE };
+                bump(&b);
+                cache.on_draw_behind(move |scope| {
+                    let bounds = scope.bounds();
+                    scope.draw_rect(bounds, Paint::fill(color));
+                })
+            });
+        let clicked =
+            Modifier.test_tag("clickTag").size(20.dp()).clickable(move || flag.set(!flag.get()));
+        // Compose's `Column`: the two one under the other.
+        Layout(
+            Modifier,
+            measure_policy(|scope, measurables, constraints| {
+                let (mut width, mut height) = (0, 0);
+                for &measurable in measurables {
+                    let placeable = scope.measure(measurable, constraints.loosen());
+                    scope.place(&placeable, 0, height);
+                    width = width.max(placeable.width);
+                    height += placeable.height;
+                }
+                scope.layout(width, height)
+            }),
+            callback(move || {
+                at_least_size(50, cached.clone());
+                at_least_size(0, clicked.clone());
+            }),
+        );
+    });
+    ui.wait_for_idle();
+    assert_eq!(builds.get(), 1);
+    let image = ui.on_node_with_tag("boxTag").capture_to_image();
+    image.assert_pixels(Some(IntSize::new(50, 50)), |_| Some(Color::BLUE));
+    ui.on_node_with_tag("clickTag").perform_click();
+    ui.wait_for_idle();
+    assert_eq!(builds.get(), 2);
+    let image = ui.on_node_with_tag("boxTag").capture_to_image();
+    image.assert_pixels(Some(IntSize::new(50, 50)), |_| Some(Color::RED));
 }

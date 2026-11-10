@@ -120,28 +120,27 @@ fn custom_layout_updating_direction_causes_remeasure() {
     let direction = mutable_state_of(LayoutDirection::Rtl);
     let actual: Seen<LayoutDirection> = Rc::default();
     let (provided, seen) = (direction.handle(), actual.clone());
+    // The policies are made once, so a recomposition gives the nodes the same ones: only the
+    // direction changing measures them again (a new policy would do it on its own).
+    let parent = measure_policy(|scope, measurables, constraints| {
+        let child = measurables[0];
+        scope.layout_with(100, 100, move |placement| {
+            let placeable = placement.measure(child, constraints);
+            placement.place_relative(&placeable, 0, 0);
+        })
+    });
+    let child = measure_policy(move |scope, _, _| {
+        seen.set(Some(scope.layout_direction()));
+        scope.layout(100, 100)
+    });
     let mut ui = rule(move || {
-        let seen = seen.clone();
+        let (parent, child) = (parent.clone(), child.clone());
         CompositionLocalProvider(LOCAL_LAYOUT_DIRECTION.provides(provided.get()), move || {
-            let seen = seen.clone();
+            let child = child.clone();
             Layout(
                 Modifier,
-                measure_policy(|scope, measurables, constraints| {
-                    let placeable = scope.measure(measurables[0], constraints);
-                    scope.place_relative(&placeable, 0, 0);
-                    scope.layout(100, 100)
-                }),
-                callback(move || {
-                    let seen = seen.clone();
-                    Layout(
-                        Modifier,
-                        measure_policy(move |scope, _, _| {
-                            seen.set(Some(scope.layout_direction()));
-                            scope.layout(100, 100)
-                        }),
-                        callback(|| {}),
-                    );
-                }),
+                parent.clone(),
+                callback(move || Layout(Modifier, child.clone(), callback(|| {}))),
             );
         });
     });

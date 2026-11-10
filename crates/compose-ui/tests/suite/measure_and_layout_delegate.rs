@@ -328,15 +328,18 @@ fn a_child_measured_again_to_another_size_measures_its_wrapping_parent_again() {
         it.add(node(|child| child.size.set(Some(DIFFERENT_SIZE))));
     });
     let mut host = delegate(&root);
-    let changed = delta(&root, || {
-        root.first().size.set(Some(DIFFERENT_SIZE_2));
-        root.first().request_remeasure();
+    let child = root.first();
+    let changed = deltas(&[&root, &child], || {
+        child.size.set(Some(DIFFERENT_SIZE_2));
+        child.request_remeasure();
         assert!(measure_and_layout(&mut host, &root));
     });
-    assert_eq!(changed.0, 1);
+    assert_eq!(changed, [(1, 1), (1, 1)]);
+    assert_eq!(root.measured.get(), IntSize::new(DIFFERENT_SIZE_2, DIFFERENT_SIZE_2));
 }
 
-// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, childRemeasureInLayoutBlockWithTheSameResult_parentNotRemeasured
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, childRemeasureInLayoutBlockWithTheSameResult_parentNotRemeasured,
+// childRemeasureInLayoutBlockWithTheSameResult_parentNotRelaidOut
 #[test]
 fn a_child_measured_in_a_block_again_to_the_same_size_leaves_its_parent() {
     let root = node(|it| {
@@ -348,10 +351,11 @@ fn a_child_measured_in_a_block_again_to_the_same_size_leaves_its_parent() {
         root.first().request_remeasure();
         assert!(!measure_and_layout(&mut host, &root));
     });
-    assert_eq!(changed, (0, 0), "childRemeasureInLayoutBlockWithTheSameResult_parentNotRelaidOut");
+    assert_eq!(changed, (0, 0));
 }
 
-// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, childRemeasureInLayoutBlockWithDifferentResult_parentNotRemeasured
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, childRemeasureInLayoutBlockWithDifferentResult_parentNotRemeasured,
+// childRemeasureInLayoutBlockWithDifferentResult_parentRelaidOut
 #[test]
 fn a_child_measured_in_a_block_again_to_another_size_places_its_parent_again() {
     let root = node(|it| {
@@ -359,12 +363,13 @@ fn a_child_measured_in_a_block_again_to_another_size_places_its_parent_again() {
         it.in_layout_block.set(true);
     });
     let mut host = delegate(&root);
-    let changed = delta(&root, || {
-        root.first().size.set(Some(DIFFERENT_SIZE));
-        root.first().request_remeasure();
+    let child = root.first();
+    let changed = deltas(&[&root, &child], || {
+        child.size.set(Some(DIFFERENT_SIZE));
+        child.request_remeasure();
         assert!(!measure_and_layout(&mut host, &root));
     });
-    assert_eq!(changed, (0, 1));
+    assert_eq!(changed, [(0, 1), (1, 1)]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, rootRemeasureRequest_childNotAffected
@@ -380,7 +385,7 @@ fn the_root_measured_again_leaves_its_child() {
             assert!(!measure_and_layout(&mut host, &root));
         })
     });
-    assert_eq!(root_changed.0, 1);
+    assert_eq!(root_changed, (1, 1));
     assert_eq!(child_changed, (0, 0));
 }
 
@@ -397,12 +402,13 @@ fn a_parent_measured_again_leaves_its_child() {
             assert!(!measure_and_layout(&mut host, &root));
         })
     });
-    assert_eq!(parent_changed.0, 1);
+    assert_eq!(parent_changed, (1, 1));
     assert_eq!(child_changed, (0, 0));
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, childRelayoutRequest_childRelaidOut,
-// childRelayoutRequest_parentNotRemeasured, childRelayoutRequest_parentNotRelaidOut
+// childRelayoutRequest_childNotRemeasured, childRelayoutRequest_parentNotRemeasured,
+// childRelayoutRequest_parentNotRelaidOut
 #[test]
 fn a_child_asked_to_place_again_is_placed_again_alone() {
     let root = node(|it| it.add(leaf()));
@@ -428,11 +434,12 @@ fn a_child_measured_in_a_block_asked_to_place_again_leaves_its_parent() {
         it.in_layout_block.set(true);
     });
     let mut host = delegate(&root);
-    let changed = delta(&root, || {
-        root.first().request_relayout();
+    let child = root.first();
+    let changed = deltas(&[&root, &child], || {
+        child.request_relayout();
         assert!(!measure_and_layout(&mut host, &root));
     });
-    assert_eq!(changed, (0, 0));
+    assert_eq!(changed, [(0, 0), (0, 1)]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, rootRelayoutRequest_childNotAffected
@@ -449,7 +456,7 @@ fn the_root_placed_again_leaves_its_child() {
         })
     });
     assert_eq!(root_changed, (0, 1));
-    assert_eq!(child_changed.1, 0);
+    assert_eq!(child_changed, (0, 0));
 }
 
 /// `request` then `then` of the child, a frame: what changed of it.
@@ -503,11 +510,11 @@ fn the_first_child_asked_to_measure_again_is_the_only_one_measured() {
     let first_changed = delta(&first, || {
         second_changed = delta(&second, || {
             first.request_remeasure();
-            measure_and_layout(&mut host, &root);
+            assert!(!measure_and_layout(&mut host, &root));
         })
     });
-    assert_eq!(first_changed.0, 1);
-    assert_eq!(second_changed.0, 0);
+    assert_eq!(first_changed, (1, 1));
+    assert_eq!(second_changed, (0, 0));
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, firstChildRelayoutRequest_onlyFirstChildRelaid
@@ -522,8 +529,8 @@ fn the_first_child_asked_to_place_again_is_the_only_one_placed() {
             assert!(!measure_and_layout(&mut host, &root));
         })
     });
-    assert_eq!(first_changed.1, 1);
-    assert_eq!(second_changed.1, 0);
+    assert_eq!(first_changed, (0, 1));
+    assert_eq!(second_changed, (0, 0));
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, bothChildrenRemeasureRequest_bothRemeasured
@@ -539,7 +546,7 @@ fn both_children_asked_to_measure_again_are_measured() {
             assert!(!measure_and_layout(&mut host, &root));
         })
     });
-    assert_eq!((first_changed.0, second_changed.0), (1, 1));
+    assert_eq!((first_changed, second_changed), ((1, 1), (1, 1)));
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, bothChildrenRelayoutRequest_bothRelaidOut
@@ -555,7 +562,7 @@ fn both_children_asked_to_place_again_are_placed() {
             assert!(!measure_and_layout(&mut host, &root));
         })
     });
-    assert_eq!((first_changed.1, second_changed.1), (1, 1));
+    assert_eq!((first_changed, second_changed), ((0, 1), (0, 1)));
 }
 
 /// What `act` changed of each of `nodes`' measurements and placements.
@@ -579,8 +586,7 @@ fn one_child_measured_again_and_another_placed_again() {
         second.request_relayout();
         assert!(!measure_and_layout(&mut host, &root));
     });
-    assert_eq!(changed[0].0, 1);
-    assert_eq!(changed[1], (0, 1));
+    assert_eq!(changed, [(1, 1), (0, 1)]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, remeasureTwoNodesOnDifferentLayers_othersAreNotAffected
@@ -597,8 +603,7 @@ fn two_nodes_of_different_depths_measured_again_leave_the_others() {
         second_first.request_remeasure();
         assert!(!measure_and_layout(&mut host, &root));
     });
-    let measured: Vec<u32> = changed.iter().map(|it| it.0).collect();
-    assert_eq!(measured, [0, 1, 0, 1]);
+    assert_eq!(changed, [(0, 0), (1, 1), (0, 0), (1, 1)]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, changeSizeOfTheLeaf_remeasuresUpToTheFixedSizeParent
@@ -622,8 +627,7 @@ fn a_leaf_s_new_size_measures_up_to_the_parent_of_a_fixed_size() {
         leaf.request_remeasure();
         assert!(!measure_and_layout(&mut host, &root));
     });
-    let measured: Vec<u32> = changed.iter().map(|it| it.0).collect();
-    assert_eq!(measured, [0, 1, 1, 1]);
+    assert_eq!(changed, [(0, 0), (1, 1), (1, 1), (1, 1)]);
 }
 
 /// Two parents of a child each.
@@ -647,8 +651,7 @@ fn cousins_measured_again_leave_their_parents() {
         second_child.request_remeasure();
         assert!(!measure_and_layout(&mut host, &root));
     });
-    let measured: Vec<u32> = changed.iter().map(|it| it.0).collect();
-    assert_eq!(measured, [0, 0, 1, 0, 1]);
+    assert_eq!(changed, [(0, 0), (0, 0), (1, 1), (0, 0), (1, 1)]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, relayoutRequestForItemsOnTheSameLevelButDifferentParents
@@ -662,8 +665,7 @@ fn cousins_placed_again_leave_their_parents() {
         second_child.request_relayout();
         assert!(!measure_and_layout(&mut host, &root));
     });
-    let placed: Vec<u32> = changed.iter().map(|it| it.1).collect();
-    assert_eq!(placed, [0, 0, 1, 0, 1]);
+    assert_eq!(changed, [(0, 0), (0, 0), (0, 1), (0, 0), (0, 1)]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, relayoutAndRemeasureRequestForItemsOnTheSameLevelButDifferentParents
@@ -677,11 +679,7 @@ fn a_cousin_measured_again_and_the_other_placed_again_leave_their_parents() {
         second_child.request_relayout();
         assert!(!measure_and_layout(&mut host, &root));
     });
-    assert_eq!(changed[0].1, 0);
-    assert_eq!(changed[1].1, 0);
-    assert_eq!(changed[2].0, 1);
-    assert_eq!(changed[3].1, 0);
-    assert_eq!(changed[4].1, 1);
+    assert_eq!(changed, [(0, 0), (0, 0), (1, 1), (0, 0), (0, 1)]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, requestChildRemeasureDuringMeasure
@@ -696,7 +694,7 @@ fn a_child_asked_to_measure_again_while_its_parent_measures_is_measured() {
         root.request_remeasure();
         assert!(!measure_and_layout(&mut host, &root));
     });
-    assert_eq!((changed[0].0, changed[1].0), (1, 1));
+    assert_eq!(changed, [(1, 1), (1, 1)]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, requestGrandchildRemeasureDuringMeasure
@@ -711,8 +709,7 @@ fn a_grandchild_asked_to_measure_again_while_the_root_measures_is_measured() {
         root.request_remeasure();
         assert!(!measure_and_layout(&mut host, &root));
     });
-    let measured: Vec<u32> = changed.iter().map(|it| it.0).collect();
-    assert_eq!(measured, [1, 0, 1]);
+    assert_eq!(changed, [(1, 1), (0, 0), (1, 1)]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, requestChildRelayoutDuringMeasure
@@ -727,7 +724,7 @@ fn a_child_asked_to_place_again_while_its_parent_measures_is_placed() {
         root.request_remeasure();
         assert!(!measure_and_layout(&mut host, &root));
     });
-    assert_eq!((changed[0].0, changed[1].1), (1, 1));
+    assert_eq!(changed, [(1, 1), (0, 1)]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, requestGrandchildRelayoutDuringMeasure
@@ -742,7 +739,7 @@ fn a_grandchild_asked_to_place_again_while_the_root_measures_is_placed() {
         root.request_remeasure();
         assert!(!measure_and_layout(&mut host, &root));
     });
-    assert_eq!((changed[0].0, changed[1].1, changed[2].1), (1, 0, 1));
+    assert_eq!(changed, [(1, 1), (0, 0), (0, 1)]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, requestChildRemeasureDuringParentLayout
@@ -757,7 +754,7 @@ fn a_child_asked_to_measure_again_while_its_parent_places_is_measured() {
         root.request_relayout();
         assert!(!measure_and_layout(&mut host, &root));
     });
-    assert_eq!((changed[0].1, changed[1].0), (1, 1));
+    assert_eq!(changed, [(0, 1), (1, 1)]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, requestGrandchildRemeasureDuringParentLayout
@@ -772,37 +769,41 @@ fn a_grandchild_asked_to_measure_again_while_the_root_places_is_measured() {
         root.request_relayout();
         assert!(!measure_and_layout(&mut host, &root));
     });
-    assert_eq!((changed[0].1, changed[1].1, changed[2].0), (1, 0, 1));
+    assert_eq!(changed, [(0, 1), (0, 0), (1, 1)]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, requestRemeasureForCurrentlyBeingRemeasuredNode
+/// As in Compose's test, the root's callback doesn't run (the root isn't measured): the child's
+/// own measurement asking is
+/// [`a_node_asking_for_itself_while_it_s_measured_or_placed_is_measured_or_placed_once`].
 #[test]
 fn a_node_asked_to_measure_again_while_it_s_being_measured_is_measured_once() {
     let root = node(|it| it.add(leaf()));
     let mut host = delegate(&root);
     let child = root.first();
     let c = child.clone();
-    let changed = delta(&child, || {
+    let changed = deltas(&[&root, &child], || {
         root.run_during_measure(true, move || c.request_remeasure());
         child.request_remeasure();
         assert!(!measure_and_layout(&mut host, &root));
     });
-    assert_eq!(changed.0, 1);
+    assert_eq!(changed, [(0, 0), (1, 1)]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, requestRelayoutForCurrentlyBeingRemeasuredNode
+/// As in Compose's test, the root's callback doesn't run (the root isn't measured).
 #[test]
 fn a_node_asked_to_place_again_while_it_s_being_measured_is_measured_and_placed_once() {
     let root = node(|it| it.add(leaf()));
     let mut host = delegate(&root);
     let child = root.first();
     let c = child.clone();
-    let changed = delta(&child, || {
+    let changed = deltas(&[&root, &child], || {
         root.run_during_measure(true, move || c.request_relayout());
         child.request_remeasure();
         assert!(!measure_and_layout(&mut host, &root));
     });
-    assert_eq!(changed, (1, 1));
+    assert_eq!(changed, [(0, 0), (1, 1)]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, requestRemeasureForCurrentlyBeingRelayoutNode
@@ -812,27 +813,28 @@ fn a_node_asked_to_measure_again_while_it_s_being_placed_is_measured_and_placed_
     let mut host = delegate(&root);
     let child = root.first();
     let c = child.clone();
-    let changed = delta(&child, || {
+    let changed = deltas(&[&root, &child], || {
         child.run_during_layout(true, move || c.request_remeasure());
         child.request_relayout();
         assert!(!measure_and_layout(&mut host, &root));
     });
-    assert_eq!(changed, (1, 2));
+    assert_eq!(changed, [(0, 0), (1, 2)]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, requestRelayoutForCurrentlyBeingRelayoutNode
+/// As in Compose's test, the root's callback doesn't run (the root isn't placed).
 #[test]
 fn a_node_asked_to_place_again_while_its_parent_places_is_placed_once() {
     let root = node(|it| it.add(leaf()));
     let mut host = delegate(&root);
     let child = root.first();
     let c = child.clone();
-    let changed = delta(&child, || {
+    let changed = deltas(&[&root, &child], || {
         root.run_during_layout(true, move || c.request_relayout());
         child.request_relayout();
         assert!(!measure_and_layout(&mut host, &root));
     });
-    assert_eq!(changed, (0, 1));
+    assert_eq!(changed, [(0, 0), (0, 1)]);
 }
 
 /// A root, a parent and a child, under root constraints from `max`.
@@ -859,7 +861,7 @@ fn the_same_root_constraints_again_measure_nothing() {
         max.set(100);
         assert!(!measure_and_layout(&mut host, &root));
     });
-    assert_eq!(changed.iter().map(|it| it.0).collect::<Vec<_>>(), [0, 0, 0]);
+    assert_eq!(changed, [(0, 0), (0, 0), (0, 0)]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, changingParentConstraints_remeasureSubTree
@@ -871,7 +873,7 @@ fn new_root_constraints_measure_the_tree_again() {
         max.set(DIFFERENT_SIZE);
         assert!(measure_and_layout(&mut host, &root));
     });
-    assert_eq!(changed.iter().map(|it| it.0).collect::<Vec<_>>(), [1, 1, 1]);
+    assert_eq!(changed, [(1, 1), (1, 1), (1, 1)]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, changingParentConstraints_remeasureOnlyAffectedNodes
@@ -883,7 +885,7 @@ fn new_root_constraints_measure_again_only_what_they_reach() {
         max.set(DIFFERENT_SIZE);
         assert!(measure_and_layout(&mut host, &root));
     });
-    assert_eq!((changed[0].0, changed[1].0), (1, 0));
+    assert_eq!(changed, [(1, 1), (0, 0)]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, requestRemeasureTriggersModifierRemeasure
@@ -914,17 +916,21 @@ fn a_parent_placed_again_with_its_child_measured_again_is_placed_once() {
     let root = node(|it| it.add(leaf()));
     let mut host = delegate(&root);
     let child = root.first();
-    let measured_first = Rc::new(Cell::new(None));
-    let (c, m) = (child.clone(), measured_first.clone());
-    let child_measures = child.measures.get();
-    root.run_during_layout(true, move || m.set(Some(c.measures.get() > child_measures)));
+    let seen = Rc::new(Cell::new(None));
+    let (c, m) = (child.clone(), seen.clone());
+    let before = child.counts();
+    // Measured, not yet placed (`layoutPending`): what the child's counts say there.
+    root.run_during_layout(true, move || {
+        let (measures, layouts) = c.counts();
+        m.set(Some((measures - before.0, layouts - before.1)));
+    });
     let changed = deltas(&[&root, &child], || {
         child.request_remeasure();
         root.request_relayout();
         assert!(!measure_and_layout(&mut host, &root));
     });
-    assert_eq!((changed[0], changed[1].0), ((0, 1), 1));
-    assert_eq!(measured_first.get(), Some(true));
+    assert_eq!(changed, [(0, 1), (1, 1)]);
+    assert_eq!(seen.get(), Some((1, 0)));
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, relayoutDependingOnRemeasuredChild_parentRemeasuredBecauseOfChangedSize
@@ -942,7 +948,7 @@ fn a_parent_placed_again_with_its_child_s_size_changed_is_measured_again() {
         root.request_relayout();
         assert!(measure_and_layout(&mut host, &root));
     });
-    assert_eq!((changed[0].0, changed[1].0), (1, 1));
+    assert_eq!(changed, [(1, 1), (1, 1)]);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt, hasRelayoutNodes
@@ -984,4 +990,127 @@ fn a_node_asked_to_measure_again_after_it_was_measured_in_the_frame_is_measured_
     });
     let measured: Vec<u32> = changed.iter().map(|it| it.0).collect();
     assert_eq!(measured, [1, 2, 0, 1, 0, 1]);
+}
+
+/// Review: what Compose's `requestRemeasureForCurrentlyBeingRemeasuredNode`,
+/// `requestRelayoutForCurrentlyBeingRemeasuredNode` and `requestRelayoutForCurrentlyBeingRelayoutNode`
+/// mean to ask, their callbacks on the node itself (Compose's are on the root, which isn't
+/// measured or placed): Compose's `requestRemeasure` while `Measuring` and `requestRelayout` while
+/// `Measuring` or `LayingOut` are swallowed, what runs seeing what asked.
+#[test]
+#[ignore = "review: a node's request for itself while it's measured or placed is queued and run after, measuring or placing it a second time in the frame, where Compose swallows it"]
+fn a_node_asking_for_itself_while_it_s_measured_or_placed_is_measured_or_placed_once() {
+    let root = node(|it| it.add(leaf()));
+    let mut host = delegate(&root);
+    let child = root.first();
+    let mut changed = Vec::new();
+    let c = child.clone();
+    changed.extend(deltas(&[&root, &child], || {
+        child.run_during_measure(true, move || c.request_remeasure());
+        child.request_remeasure();
+        assert!(!measure_and_layout(&mut host, &root));
+    }));
+    let c = child.clone();
+    changed.extend(deltas(&[&root, &child], || {
+        child.run_during_measure(true, move || c.request_relayout());
+        child.request_remeasure();
+        assert!(!measure_and_layout(&mut host, &root));
+    }));
+    let c = child.clone();
+    changed.extend(deltas(&[&root, &child], || {
+        child.run_during_layout(true, move || c.request_relayout());
+        child.request_relayout();
+        assert!(!measure_and_layout(&mut host, &root));
+    }));
+    assert_eq!(changed, [(0, 0), (1, 1), (0, 0), (1, 1), (0, 0), (0, 1)]);
+}
+
+/// Review: a request made while the frame measures or places, done in that frame, leaves no
+/// work (Compose's `hasPendingMeasureOrLayout` false, and its request returns
+/// `!duringFullMeasureLayoutPass`, so it asks the owner for no other layout).
+#[test]
+#[ignore = "review: a node's request made during a frame's layout and done in it still leaves has_pending_work (frame_requested set by the request), an empty frame more where Compose asks for none"]
+fn a_request_made_and_done_in_a_frame_leaves_no_work() {
+    let root = node(|it| it.add(node(|it| it.add(leaf()))));
+    let mut host = delegate(&root);
+    let (child, grandchild) = (root.first(), root.first().first());
+    let g = grandchild.clone();
+    let changed = deltas(&[&root, &child, &grandchild], || {
+        root.run_during_measure(true, move || g.request_remeasure());
+        root.request_remeasure();
+        host.frame();
+    });
+    assert_eq!(changed, [(1, 1), (0, 0), (1, 1)]);
+    let c = child.clone();
+    let changed = deltas(&[&root, &child, &grandchild], || {
+        child.run_during_layout(true, move || c.request_remeasure());
+        child.request_relayout();
+        host.frame();
+    });
+    assert_eq!(changed, [(0, 0), (1, 2), (0, 0)]);
+    let next = deltas(&[&root, &child, &grandchild], || {
+        host.frame();
+    });
+    assert_eq!(next, [(0, 0); 3], "the frame did it all");
+    let g = grandchild.clone();
+    root.run_during_measure(true, move || g.request_remeasure());
+    root.request_remeasure();
+    host.frame();
+    assert!(!host.has_pending_work());
+}
+
+/// Review: a child its parent never measured, asked to measure again, measures nothing: Compose's
+/// child is still `measurePending` from its creation, so `requestRemeasure` returns at once and
+/// its parent isn't asked either.
+#[test]
+#[ignore = "review: a never-measured child's remeasure request measures its parent (remeasure_children_in_place, constraints None), where Compose's asks nothing (ui-core.md, differences, 14)"]
+fn a_child_its_parent_never_measured_asked_to_measure_again_measures_nothing() {
+    let child = node(|it| it.size.set(Some(40)));
+    let root = node(|it| {
+        it.no_measure.set(true);
+        it.size.set(Some(100));
+        it.add(child.clone());
+    });
+    let mut host = delegate(&root);
+    assert_eq!((root.counts(), child.counts()), ((1, 1), (0, 0)));
+    let changed = deltas(&[&root, &child], || {
+        child.size.set(Some(60));
+        child.request_remeasure();
+        assert!(!measure_and_layout(&mut host, &root));
+    });
+    assert_eq!(changed, [(0, 0), (0, 0)]);
+}
+
+/// Review: a child its parent measured, then stopped measuring, asked to measure again with a
+/// new size measures nothing until its parent measures it again: Compose's isn't placed and its
+/// `measuredByParent` is `NotUsed`, so `requestRemeasure` only marks it `measurePending`
+/// (`canAffectPlacedParent` false), and its parent's next measurement measures it.
+#[test]
+#[ignore = "review: a child its parent stopped measuring is measured at once when asked, and its new size measures its parent, where Compose's waits for its parent (ui-core.md, differences, 14)"]
+fn a_child_its_parent_stopped_measuring_asked_to_measure_again_waits_for_its_parent() {
+    let child = node(|it| it.size.set(Some(40)));
+    let root = node(|it| {
+        it.size.set(Some(100));
+        it.add(child.clone());
+    });
+    let mut host = delegate(&root);
+    assert_eq!(child.counts(), (1, 1));
+    root.no_measure.set(true);
+    root.request_remeasure();
+    host.frame();
+    assert_eq!(child.counts(), (1, 1));
+
+    let changed = deltas(&[&root, &child], || {
+        child.size.set(Some(30));
+        child.request_remeasure();
+        assert!(!measure_and_layout(&mut host, &root));
+    });
+    assert_eq!(changed, [(0, 0), (0, 0)]);
+
+    root.no_measure.set(false);
+    root.request_remeasure();
+    let changed = deltas(&[&root, &child], || {
+        host.frame();
+    });
+    assert_eq!(changed, [(1, 1), (1, 1)]);
 }
