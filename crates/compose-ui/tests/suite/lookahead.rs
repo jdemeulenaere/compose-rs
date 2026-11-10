@@ -2313,7 +2313,7 @@ fn nested_lookahead_scopes_each_give_their_own_scope_coordinates() {
 /// Per-node `force_remeasure` on `L1` after `L1` and `L3` need measuring ahead (while `L2`'s
 /// size holds so lookahead skips `L2`'s block) and all three need placing now: `L3`'s lookahead
 /// block runs before `L1`, `L2` and `L3`'s blocks now, all before `force_remeasure` returns.
-#[ignore = "needs w2-layout-scheduler remeasure_now place_pass (#83)"]
+#[ignore = "the placement order passes since D2385, but `!host.needs_frame()` fails: `force_remeasure` leaves a draw pending (D1164), where Compose's test checks only the nodes' pending measure and layout flags"]
 #[test]
 fn a_per_node_force_remeasure_runs_lookahead_placement_before_now_placement() {
     let (l1_ahead, l3_ahead, blocks) =

@@ -29,7 +29,6 @@ fn visible_true_is_displayed() {
 
 // Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/VisibleTest.kt, visible_false_isNotDisplayed
 #[test]
-#[ignore = "unplaced content: a layout modifier not placing its content stays placed (w2-layout-scheduler)"]
 fn visible_false_is_not_displayed() {
     let mut ui = rule(|| {
         Box!(modifier = Modifier.size(50.dp()).visible(false).test_tag(TEST_TAG));
@@ -39,7 +38,6 @@ fn visible_false_is_not_displayed() {
 
 // Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/VisibleTest.kt, visible_false_occupiesSpace
 #[test]
-#[ignore = "unplaced content: a layout modifier not placing its content stays placed (w2-layout-scheduler)"]
 fn visible_false_occupies_space() {
     let parent_size = Rc::new(Cell::new(IntSize::ZERO));
     let recorded = parent_size.clone();
@@ -62,7 +60,6 @@ fn visible_false_occupies_space() {
 
 // Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/VisibleTest.kt, visible_toggle_changesDisplay
 #[test]
-#[ignore = "unplaced content: a layout modifier not placing its content stays placed (w2-layout-scheduler)"]
 fn visible_toggle_changes_display() {
     let is_visible = mutable_state_of(true);
     let current = is_visible.handle();
@@ -78,7 +75,6 @@ fn visible_toggle_changes_display() {
 
 // Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/VisibleTest.kt, visible_false_isNotClickable
 #[test]
-#[ignore = "unplaced content: a layout modifier not placing its content stays placed (w2-layout-scheduler)"]
 fn visible_false_is_not_clickable() {
     let clicked = Rc::new(Cell::new(false));
     let mark = clicked.clone();
@@ -98,7 +94,7 @@ fn visible_false_is_not_clickable() {
 
 // Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/VisibleTest.kt, visible_false_childIsNotClickable
 #[test]
-#[ignore = "unplaced content: a layout modifier not placing its content stays placed (w2-layout-scheduler)"]
+#[ignore = "unplaced content: a child of content a layout modifier doesn't place isn't in the semantics tree (bounds.rs's 6, D1037), so it can't be found to click"]
 fn visible_false_child_is_not_clickable() {
     let clicked = Rc::new(Cell::new(false));
     let mark = clicked.clone();
