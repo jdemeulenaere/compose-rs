@@ -79,7 +79,7 @@ pub use gestures::{
     TransformableStateExt, remember_scrollable_2d_state, remember_transformable_state,
     scrollable_2d_state, transformable_state,
 };
-pub use image::{ContentScale, Image, PainterImage, VectorImage};
+pub use image::{ContentScale, FilterQuality, Image, PainterImage, VectorImage};
 pub use input_transformation::{InputTransform, InputTransformation, KeyboardActionHandler};
 pub use lazy::pager::{
     HorizontalPager, PageInfo, PageSize, PagerDefaults, PagerLayoutInfo, PagerScope,

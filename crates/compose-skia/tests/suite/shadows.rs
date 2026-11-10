@@ -277,3 +277,111 @@ fn a_drop_shadows_brush_spans_the_shadow() {
         assert!((share - expected).abs() < 0.04, "at {x}: {share} against {expected}");
     }
 }
+
+fn image_shader_shadow_brush() -> Brush {
+    use compose::ui::{ImageBitmap, Paint, Rect, Shader, ShaderBrush, TileMode};
+    compose::ui::platform::set_bitmap_rasterizer(std::sync::Arc::new(
+        compose_skia::SkiaBitmapRasterizer,
+    ));
+    let bitmap = ImageBitmap::new(100, 100);
+    let mut canvas = compose::ui::canvas::Canvas::new(&bitmap);
+    canvas.draw_rect(Rect::new(0.0, 0.0, 100.0, 50.0), Paint::fill(Color::RED));
+    canvas.draw_rect(Rect::new(0.0, 50.0, 100.0, 100.0), Paint::fill(Color::GREEN));
+    Brush::from(ShaderBrush::new(Shader::image(&bitmap, TileMode::Clamp, TileMode::Clamp)))
+}
+
+struct RectPathShape;
+
+impl compose::ui::CustomShape for RectPathShape {
+    fn create_outline(
+        &self,
+        size: compose::ui::Size,
+        _layout_direction: compose::ui::LayoutDirection,
+        _density: &compose::ui::Density,
+    ) -> compose::ui::Outline {
+        let path = compose::ui::Path::new();
+        path.line_to(size.width, 0.0);
+        path.line_to(size.width, size.height);
+        path.line_to(0.0, size.height);
+        path.close();
+        compose::ui::Outline::Generic(path.data(), compose::ui::Offset::ZERO)
+    }
+
+    fn same(&self, other: &dyn compose::ui::CustomShape) -> bool {
+        other.downcast_ref::<RectPathShape>().is_some()
+    }
+}
+
+fn paint_drop_shadow(
+    shape: Shape,
+    shadow: Shadow,
+    alpha: f32,
+    color_filter: Option<ColorFilter>,
+) -> CapturedImage {
+    set_capture_renderer(compose_skia::raster_colors);
+    let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), move || {
+        let painter = Painter::new(DropShadowPainter::new(shape.clone(), shadow.clone()));
+        Box!(
+            modifier = Modifier.test_tag(TAG).size(100.dp()).background(Color::BLUE).paint_with(
+                painter,
+                true,
+                Alignment::CENTER,
+                ContentScale::FillBounds,
+                alpha,
+                color_filter
+            )
+        );
+    });
+    ui.on_node_with_tag(TAG).capture_to_image()
+}
+
+// Compose: compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/shadow/DropShadowPainterTest.kt, testDropShadowPainterWithBrush, testDropShadowPainterPathWithBrush, testDropShadowPainterWithBrushAndColorFilter, testDropShadowPainterWithBrushAndAlpha
+#[test]
+fn drop_shadow_painter_with_image_shader_brush_and_filters() {
+    let channel = |c: Color, shift: u32| ((c.to_argb() >> shift) & 0xff) as i32;
+
+    // 1. Rectangle + ImageShader brush (top half red, bottom half green over blue; shadow
+    // extent shifts brush origin back by reach = 20, so top split is at y=30):
+    let rect_img = paint_drop_shadow(
+        Shape::Rectangle,
+        Shadow::brushed(Dp(20.0), image_shader_shadow_brush()),
+        1.0,
+        None,
+    );
+    assert!(channel(rect_img.pixel(50, 20), 16) >= channel(rect_img.pixel(50, 5), 16));
+    assert!(channel(rect_img.pixel(50, 75), 8) >= channel(rect_img.pixel(50, 95), 8));
+    assert!(channel(rect_img.pixel(50, 20), 16) > 50 && channel(rect_img.pixel(50, 75), 8) > 50);
+
+    // 2. Outline::Generic path + ImageShader brush:
+    let path_img = paint_drop_shadow(
+        Shape::custom(RectPathShape),
+        Shadow::brushed(Dp(20.0), image_shader_shadow_brush()),
+        1.0,
+        None,
+    );
+    assert!(channel(path_img.pixel(50, 20), 16) >= channel(path_img.pixel(50, 5), 16));
+    assert!(channel(path_img.pixel(50, 75), 8) >= channel(path_img.pixel(50, 95), 8));
+    assert!(channel(path_img.pixel(50, 20), 16) > 50 && channel(path_img.pixel(50, 75), 8) > 50);
+
+    // 3. ImageShader brush + ColorFilter::tint(Color::RED) makes even bottom green side red:
+    let tinted = paint_drop_shadow(
+        Shape::Rectangle,
+        Shadow::brushed(Dp(20.0), image_shader_shadow_brush()),
+        1.0,
+        Some(ColorFilter::tint(Color::RED)),
+    );
+    assert!(channel(tinted.pixel(50, 60), 16) > channel(tinted.pixel(50, 60), 8) + 50);
+
+    // 4. Vertical gradient brush + alpha = 0.5 fades over blue background:
+    let gradient = Brush::vertical_gradient([
+        (0.0, Color::RED),
+        (0.5, Color::RED),
+        (0.5, Color::GREEN),
+        (1.0, Color::GREEN),
+    ]);
+    let faded = paint_drop_shadow(Shape::Rectangle, Shadow::brushed(Dp(20.0), gradient), 0.5, None);
+    assert!(channel(faded.pixel(50, 40), 16) <= 204);
+    assert!(channel(faded.pixel(50, 40), 0) > 0);
+    assert!(channel(faded.pixel(50, 60), 8) <= 204);
+    assert!(channel(faded.pixel(50, 60), 0) > 0);
+}

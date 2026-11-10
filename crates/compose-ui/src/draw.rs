@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::color_filter::{BlendMode, ColorFilter};
 use crate::display_list::{DisplayList, DrawOp};
 use crate::graphics::{Color, Outline, Paint, Shape};
+use crate::image::FilterQuality;
 use crate::path::{Path, PathData};
 use crate::text::ParagraphHandle;
 use crate::unit::{Density, Offset, Rect, Size};
@@ -152,8 +153,18 @@ impl DrawScope<'_> {
     ) -> Paint {
         let mut paint = Paint::fill(brush.color(alpha));
         paint.style = style;
-        if let Some(shader) = brush.shader(self.size, self.origin, alpha) {
-            paint.shader = Some(self.list.push_shader(shader));
+        match brush.shader(self.size, self.origin, alpha) {
+            Some(shader) => paint.shader = Some(self.list.push_shader(shader)),
+            // A gradient over an empty size paints black, as `ShaderBrush.applyTo` (D2401); a
+            // shader brush's color is black already.
+            None if !matches!(
+                brush,
+                crate::brush::Brush::Solid(_) | crate::brush::Brush::Shader(_)
+            ) =>
+            {
+                paint.color = Color::BLACK.with_alpha(alpha.clamp(0.0, 1.0));
+            }
+            None => {}
         }
         paint
     }
@@ -259,6 +270,12 @@ impl DrawScope<'_> {
         self.list.push(DrawOp::DrawParagraph(paragraph, position));
     }
 
+    /// The tree's text stack, for text nodes updating dynamic shader brushes during draw.
+    #[doc(hidden)]
+    pub fn tree_text_measurer(&self) -> crate::text::SharedTextMeasurer {
+        self.current_value_of(&crate::font::LOCAL_TREE_TEXT_MEASURER)
+    }
+
     /// Saves the clip, to restore with [`restore`](DrawScope::restore).
     pub fn save(&mut self) {
         self.list.push(DrawOp::Save);
@@ -302,6 +319,20 @@ impl DrawScope<'_> {
         alpha: f32,
         color_filter: Option<&ColorFilter>,
     ) {
+        self.draw_image_with(image, src, dst, alpha, color_filter, FilterQuality::Low);
+    }
+
+    /// The same, sampled as `filter_quality` says, as `drawImage(…, colorFilter,
+    /// filterQuality)`.
+    pub fn draw_image_with(
+        &mut self,
+        image: &crate::image::ImageBitmap,
+        src: Rect,
+        dst: Rect,
+        alpha: f32,
+        color_filter: Option<&ColorFilter>,
+        filter_quality: FilterQuality,
+    ) {
         // A transparent `SrcIn` tint draws nothing.
         if color_filter.and_then(ColorFilter::src_in_tint).is_some_and(|tint| tint.alpha_is_zero())
         {
@@ -309,7 +340,8 @@ impl DrawScope<'_> {
         }
         let color_filter = color_filter.map(|filter| self.list.push_color_filter(*filter));
         let dst = self.to_list(dst);
-        self.list.push(DrawOp::DrawImage { image: image.clone(), src, dst, alpha, color_filter });
+        let image = image.clone();
+        self.list.push(DrawOp::DrawImage { image, src, dst, alpha, color_filter, filter_quality });
     }
 
     /// `paint` through `color_filter` (none: as it is), as the draw calls' `colorFilter`: the

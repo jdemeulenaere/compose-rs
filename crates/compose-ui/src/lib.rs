@@ -57,6 +57,7 @@ mod indirect_pointer;
 mod input;
 mod input_mode;
 mod interaction;
+pub mod interpolatable;
 mod intl;
 mod layout;
 mod layout_callbacks;
@@ -146,7 +147,7 @@ pub mod platform {
         PlatformAutofillManager, TEXT_CLASS_NAME, TEXT_FIELD_CLASS_NAME, VIEW_INVISIBLE,
         VIEW_VISIBLE, ViewStructure, trim_to_safe_length,
     };
-    pub use crate::brush::{Gradient, Shader, ShaderIndex};
+    pub use crate::brush::{Gradient, PaintShader, ShaderIndex};
     pub use crate::canvas::{BitmapRasterizer, set_bitmap_rasterizer};
     pub use crate::clipboard::MemoryClipboard;
     pub use crate::color_filter::ColorFilterIndex;
@@ -169,7 +170,9 @@ pub mod platform {
     pub use crate::font_resolver::{NoFontLoader, PlatformFonts, ResolvedFonts};
     pub use crate::graphics_layer::LayerProperties;
     pub use crate::host::{FrameStats, LOCAL_CONSTRAINTS_HINT, UiHost};
-    pub use crate::image::{ImageDecoder, set_image_decoder};
+    pub use crate::image::{
+        ImageDecoder, extended_srgb_f16_to_image, image_to_extended_srgb_f16, set_image_decoder,
+    };
     pub use crate::input::{Action, FocusBatch};
     pub use crate::layout::emit_layout_node;
     pub use crate::layout::{NO_INTRINSICS_MESSAGE, StackMeasurePolicy};
@@ -238,7 +241,9 @@ pub use beyond_bounds::{
     MODIFIER_LOCAL_BEYOND_BOUNDS_LAYOUT,
 };
 pub use border::{BorderRenderer, BorderStroke};
-pub use brush::{Brush, ColorStops, TileMode};
+pub use brush::{
+    Brush, ColorStops, CompositeShader, CustomShaderBrush, Shader, ShaderBrush, TileMode,
+};
 pub use clickable::TAP_INDICATION_DELAY;
 pub use clipboard::{ClipboardManager, LOCAL_CLIPBOARD_MANAGER};
 pub use color_filter::{BlendMode, ColorFilter, ColorMatrix};
@@ -283,7 +288,8 @@ pub use graphics_layer::{
 pub use graphics_layer_object::{GraphicsLayer, remember_graphics_layer};
 pub use host::LOCAL_DENSITY;
 pub use image::{
-    ImageBitmap, ImageBitmapConfig, PixelMap, decode_image_bytes, remember_image_resource,
+    FilterQuality, ImageBitmap, ImageBitmapConfig, PixelMap, decode_image_bytes,
+    remember_image_resource,
 };
 pub use indication::{Indication, IndicationNodeFactory, LOCAL_INDICATION};
 pub use indirect_pointer::{
@@ -354,7 +360,7 @@ pub use nested_scroll::{
 pub use node_context::{NodeContext, NodeHandle};
 pub use observer_node::ObserverModifierNode;
 pub use overlay::{PopupPositionProvider, WindowPosition};
-pub use painter::{BitmapPainter, ColorPainter, CustomPainter, Painter};
+pub use painter::{BitmapPainter, BrushPainter, ColorPainter, CustomPainter, Painter};
 pub use paragraph::{PaintOverrides, Paragraph, ParagraphIntrinsics, TextLayoutInput};
 pub use paragraph_style::ParagraphStyle;
 pub use parent_data::{LayoutIdParentData, ParentDataModifierNode};

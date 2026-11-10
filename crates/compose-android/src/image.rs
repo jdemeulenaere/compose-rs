@@ -32,7 +32,7 @@ pub(crate) fn install(env: &mut Env) {
     let Ok(rasterize) = env.get_static_method_id(
         &class,
         jni_str!("rasterize"),
-        jni_sig!("(Ljava/nio/ByteBuffer;IILjava/nio/ByteBuffer;)V"),
+        jni_sig!("(Ljava/nio/ByteBuffer;IIIZILjava/nio/ByteBuffer;)V"),
     ) else {
         return;
     };
@@ -52,18 +52,18 @@ struct AndroidBitmapRasterizer {
     rasterize: JStaticMethodID,
 }
 
-impl compose_ui::platform::BitmapRasterizer for AndroidBitmapRasterizer {
-    fn draw(
+impl AndroidBitmapRasterizer {
+    #[allow(clippy::too_many_arguments)]
+    fn call_rasterize(
         &self,
-        list: &compose_ui::platform::DisplayList,
+        pixels: &mut [u8],
         width: u32,
         height: u32,
-        pixels: &mut [u8],
+        config: u8,
+        has_alpha: bool,
+        color_space_id: u8,
+        drawing: &[u8],
     ) {
-        if width == 0 || height == 0 {
-            return;
-        }
-        let drawing = bitmap_drawing(list);
         // Any thread: attached for good if it isn't, in a local frame of its own.
         let _ = crate::bridge::vm().attach_current_thread(|env| -> jni::errors::Result<()> {
             let drawn = (|| -> jni::errors::Result<()> {
@@ -75,8 +75,8 @@ impl compose_ui::platform::BitmapRasterizer for AndroidBitmapRasterizer {
                 let drawing = unsafe {
                     env.new_direct_byte_buffer(drawing.as_ptr().cast_mut(), drawing.len())
                 }?;
-                // SAFETY: `rasterize` is `(Ljava/nio/ByteBuffer;IILjava/nio/ByteBuffer;)V`, static,
-                // of `class`.
+                // SAFETY: `rasterize` is `(Ljava/nio/ByteBuffer;IIIZILjava/nio/ByteBuffer;)V`,
+                // static, of `class`.
                 unsafe {
                     env.call_static_method_unchecked(
                         &self.class,
@@ -86,6 +86,9 @@ impl compose_ui::platform::BitmapRasterizer for AndroidBitmapRasterizer {
                             JValue::Object(&pixels).as_jni(),
                             JValue::Int(width as i32).as_jni(),
                             JValue::Int(height as i32).as_jni(),
+                            JValue::Int(i32::from(config)).as_jni(),
+                            JValue::Bool(has_alpha).as_jni(),
+                            JValue::Int(i32::from(color_space_id)).as_jni(),
                             JValue::Object(&drawing).as_jni(),
                         ],
                     )
@@ -95,6 +98,44 @@ impl compose_ui::platform::BitmapRasterizer for AndroidBitmapRasterizer {
             crate::bridge::check(env, "ComposeRsImages.rasterize");
             drawn
         });
+    }
+}
+
+impl compose_ui::platform::BitmapRasterizer for AndroidBitmapRasterizer {
+    fn draw(
+        &self,
+        list: &compose_ui::platform::DisplayList,
+        width: u32,
+        height: u32,
+        config: compose_ui::ImageBitmapConfig,
+        has_alpha: bool,
+        color_space: &compose_ui::colorspace::ColorSpace,
+        pixels: &mut [u8],
+    ) {
+        if width == 0 || height == 0 {
+            return;
+        }
+        let drawing = bitmap_drawing(list);
+        if let Some((config_byte, cs_id)) =
+            crate::serialize::android_bitmap_format(config, color_space)
+        {
+            self.call_rasterize(pixels, width, height, config_byte, has_alpha, cs_id, &drawing);
+        } else {
+            let mut f16 = compose_ui::platform::image_to_extended_srgb_f16(
+                pixels,
+                config,
+                has_alpha,
+                color_space,
+            );
+            self.call_rasterize(&mut f16, width, height, 3, has_alpha, 2, &drawing);
+            compose_ui::platform::extended_srgb_f16_to_image(
+                &f16,
+                pixels,
+                config,
+                has_alpha,
+                color_space,
+            );
+        }
     }
 }
 
@@ -221,8 +262,14 @@ mod tests {
         let image = compose_ui::ImageBitmap::from_rgba_premultiplied(1, 1, vec![255; 4]);
         let mut list = DisplayList::default();
         let rect = Rect::new(0.0, 0.0, 1.0, 1.0);
-        let draw =
-            DrawOp::DrawImage { image, src: rect, dst: rect, alpha: 1.0, color_filter: None };
+        let draw = DrawOp::DrawImage {
+            image,
+            src: rect,
+            dst: rect,
+            alpha: 1.0,
+            color_filter: None,
+            filter_quality: compose_ui::FilterQuality::Low,
+        };
         list.push(draw);
         let bytes = bitmap_drawing(&list);
         assert_eq!(bytes[0], tag::DEFINE_IMAGE);

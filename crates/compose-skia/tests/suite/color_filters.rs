@@ -95,6 +95,7 @@ fn a_layer_and_an_image_draw_through_their_filters() {
         dst: Rect::new(5.0, 0.0, 10.0, 10.0),
         alpha: 1.0,
         color_filter: Some(lit),
+        filter_quality: compose::ui::FilterQuality::Low,
     });
     let mut renderer = render(&list);
     assert_eq!(renderer.pixel(2, 5), Color::BLUE);

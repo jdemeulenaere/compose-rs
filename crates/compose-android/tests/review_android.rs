@@ -115,6 +115,7 @@ fn image_op(image: ImageBitmap) -> DrawOp {
         dst: Rect::new(0.0, 0.0, w.max(1.0), h.max(1.0)),
         alpha: 1.0,
         color_filter: None,
+        filter_quality: compose_ui::FilterQuality::Low,
     }
 }
 
@@ -397,12 +398,13 @@ fn an_images_color_filter_goes_last_on_the_wire() {
             dst: Rect::new(0.0, 0.0, 1.0, 1.0),
             alpha: 1.0,
             color_filter,
+            filter_quality: compose_ui::FilterQuality::Low,
         });
         list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 1.0, 1.0), Paint::fill(Color::RED)));
         write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
         out.bytes
     };
-    const FIXED: usize = 4 + 32 + 4;
+    const FIXED: usize = 4 + 32 + 4 + 1;
     for (tint, filter_bytes) in [(Some(Color::BLUE), 1 + 4 + 1), (None, 1)] {
         let bytes = tinted(tint);
         let at = bytes.iter().position(|byte| *byte == tag::DRAW_IMAGE).expect("the image");

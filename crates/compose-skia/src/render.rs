@@ -13,7 +13,7 @@ use skia_safe::{Canvas, ClipOp, EncodedImageFormat, Point, RRect, Surface, Vecto
 use crate::text::SkiaTextMeasurer;
 
 /// A recording's shaders and color filters, which its paints, images and layers name by index.
-type Tables<'a> = (&'a [compose_ui::platform::Shader], &'a [ColorFilter]);
+type Tables<'a> = (&'a [compose_ui::platform::PaintShader], &'a [ColorFilter]);
 
 fn rect(rect: &Rect) -> skia_safe::Rect {
     skia_safe::Rect::new(rect.left, rect.top, rect.right, rect.bottom)
@@ -44,13 +44,68 @@ fn skia_paint_with(
     skia
 }
 
+/// `shader` for Skia: its own transform, then `local` (the inverse of a transform the
+/// operation applies before drawing, so the shader stays in the list's coordinates).
 pub(crate) fn skia_shader(
-    shader: &compose_ui::platform::Shader,
+    shader: &compose_ui::platform::PaintShader,
     local: Option<&skia_safe::Matrix>,
 ) -> Option<skia_safe::Shader> {
-    use compose_ui::platform::Shader;
+    let transform = shader.transform.as_deref().map(skia_matrix);
+    let local = match (local, transform) {
+        (Some(local), Some(transform)) => Some(skia_safe::Matrix::concat(local, &transform)),
+        (local, None) => local.copied(),
+        (None, transform) => transform,
+    };
+    plain_skia_shader(&shader.shader, local.as_ref())
+}
+
+/// A Compose matrix as Skia's 3 × 3 (its rows 0, 1 and 3, columns 0, 1 and 3), as Compose's
+/// `Matrix.setFrom`.
+pub(crate) fn skia_matrix(matrix: &compose_ui::Matrix) -> skia_safe::Matrix {
+    let v = &matrix.values;
+    skia_safe::Matrix::new_all(v[0], v[4], v[12], v[1], v[5], v[13], v[3], v[7], v[15])
+}
+
+fn skia_tile_mode(tile_mode: compose_ui::TileMode) -> skia_safe::TileMode {
+    match tile_mode {
+        compose_ui::TileMode::Clamp => skia_safe::TileMode::Clamp,
+        compose_ui::TileMode::Repeated => skia_safe::TileMode::Repeat,
+        compose_ui::TileMode::Mirror => skia_safe::TileMode::Mirror,
+        compose_ui::TileMode::Decal => skia_safe::TileMode::Decal,
+    }
+}
+
+/// `shader` for Skia, with `local` as its local matrix: a gradient, a bitmap (sampled
+/// linearly, as Android's filtered paints sample a `BitmapShader`, D2404), two shaders blended
+/// (Skia's `SkShaders::Blend`, as Skiko's `CompositeShader`). `None` for a gradient without
+/// colors, and for a composite with such a part.
+fn plain_skia_shader(
+    shader: &compose_ui::Shader,
+    local: Option<&skia_safe::Matrix>,
+) -> Option<skia_safe::Shader> {
+    use compose_ui::Shader;
     use skia_safe::gradient::{Colors, Gradient, Interpolation, shaders};
-    let gradient = shader.gradient();
+    let gradient = match shader {
+        Shader::Image { image, tile_mode_x, tile_mode_y } => {
+            let sampling = skia_safe::SamplingOptions::new(
+                skia_safe::FilterMode::Linear,
+                skia_safe::MipmapMode::None,
+            );
+            let tiles = (skia_tile_mode(*tile_mode_x), skia_tile_mode(*tile_mode_y));
+            return skia_image(image)?.to_shader(tiles, sampling, local);
+        }
+        Shader::Composite(composite) => {
+            let dst = plain_skia_shader(&composite.dst, None)?;
+            let src = plain_skia_shader(&composite.src, None)?;
+            let blended =
+                skia_safe::shaders::blend(skia_blend_mode(composite.blend_mode), dst, src);
+            return Some(match local {
+                Some(local) => blended.with_local_matrix(local),
+                None => blended,
+            });
+        }
+        gradient => gradient.gradient().expect("a gradient"),
+    };
     let mut colors: Vec<skia_safe::Color4f> =
         gradient.colors.iter().map(|color| color4f(*color)).collect();
     // A gradient needs two colors: one is a solid color.
@@ -61,12 +116,7 @@ pub(crate) fn skia_shader(
         return None;
     }
     let stops = gradient.stops.as_deref().filter(|stops| stops.len() == colors.len());
-    let mode = match gradient.tile_mode {
-        compose_ui::TileMode::Clamp => skia_safe::TileMode::Clamp,
-        compose_ui::TileMode::Repeated => skia_safe::TileMode::Repeat,
-        compose_ui::TileMode::Mirror => skia_safe::TileMode::Mirror,
-        compose_ui::TileMode::Decal => skia_safe::TileMode::Decal,
-    };
+    let mode = skia_tile_mode(gradient.tile_mode);
     // Interpolated premultiplied, as Android's gradients (HWUI builds them with
     // `kInterpolateColorsInPremul_Flag`) and Skiko's (`GradientStyle.DEFAULT`), D210.
     let interpolation = Interpolation {
@@ -86,6 +136,7 @@ pub(crate) fn skia_shader(
         Shader::SweepGradient { center, .. } => {
             shaders::sweep_gradient(Point::new(center.x, center.y), (0.0, 360.0), &gradient, local)
         }
+        Shader::Image { .. } | Shader::Composite(_) => unreachable!("not a gradient"),
     }
 }
 
@@ -435,16 +486,13 @@ fn draw_op(
             };
             canvas.draw_vertices(&skia, blend, &skia_paint_with(paint, tables, None));
         }
-        DrawOp::DrawImage { image, src, dst, alpha: image_alpha, color_filter } => {
+        DrawOp::DrawImage { image, src, dst, alpha: image_alpha, color_filter, filter_quality } => {
             let (alpha, outer_alpha) = (*image_alpha, alpha);
             if let Some(skia) = skia_image(image) {
                 let mut paint = skia_safe::Paint::default();
                 paint.set_alpha_f(alpha.clamp(0.0, 1.0) * outer_alpha);
                 paint.set_color_filter(filter(color_filter));
-                let sampling = skia_safe::SamplingOptions::new(
-                    skia_safe::FilterMode::Linear,
-                    skia_safe::MipmapMode::None,
-                );
+                let sampling = sampling(*filter_quality);
                 canvas.draw_image_rect_with_sampling_options(
                     &skia,
                     Some((&rect(src), skia_safe::canvas::SrcRectConstraint::Strict)),
@@ -904,10 +952,63 @@ fn forget_dropped_images() {
 }
 
 /// Skia's image for `image`, made once per bitmap (while it lives).
+/// How Skia samples a bitmap drawn at `quality`, as Skiko's `FilterQuality` (D2403): the nearest
+/// pixel, linear, linear between mipmap levels, Mitchell's cubic.
+fn sampling(quality: compose_ui::FilterQuality) -> skia_safe::SamplingOptions {
+    use skia_safe::{FilterMode, MipmapMode, SamplingOptions};
+    match quality {
+        compose_ui::FilterQuality::None => {
+            SamplingOptions::new(FilterMode::Nearest, MipmapMode::None)
+        }
+        compose_ui::FilterQuality::Low => {
+            SamplingOptions::new(FilterMode::Linear, MipmapMode::None)
+        }
+        compose_ui::FilterQuality::Medium => {
+            SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear)
+        }
+        compose_ui::FilterQuality::High => {
+            SamplingOptions::from(skia_safe::CubicResampler::mitchell())
+        }
+    }
+}
+
+fn skia_bitmap_info(
+    width: u32,
+    height: u32,
+    config: compose_ui::ImageBitmapConfig,
+    has_alpha: bool,
+) -> skia_safe::ImageInfo {
+    use compose_ui::ImageBitmapConfig;
+    let color_type = match config {
+        ImageBitmapConfig::Alpha8 => skia_safe::ColorType::Alpha8,
+        ImageBitmapConfig::Rgb565 => skia_safe::ColorType::RGB565,
+        ImageBitmapConfig::F16 => skia_safe::ColorType::RGBAF16,
+        ImageBitmapConfig::Argb8888 | ImageBitmapConfig::Gpu => skia_safe::ColorType::RGBA8888,
+    };
+    let alpha_type = if config == ImageBitmapConfig::Rgb565
+        || (!has_alpha && config != ImageBitmapConfig::Alpha8)
+    {
+        skia_safe::AlphaType::Opaque
+    } else {
+        skia_safe::AlphaType::Premul
+    };
+    skia_safe::ImageInfo::new((width as i32, height as i32), color_type, alpha_type, None)
+}
+
+fn is_direct_srgb(
+    config: compose_ui::ImageBitmapConfig,
+    color_space: &compose_ui::colorspace::ColorSpace,
+) -> bool {
+    color_space.is_srgb()
+        || *color_space == compose_ui::colorspace::ColorSpaces::EXTENDED_SRGB
+        || config == compose_ui::ImageBitmapConfig::Alpha8
+}
+
 fn skia_image(image: &compose_ui::ImageBitmap) -> Option<skia_safe::Image> {
     // Read first, the cache not borrowed: a bitmap drawn into is drawn when read, by Skia.
     let pixels = image.pixels();
     let id = pixels.as_ptr() as usize;
+    let (config, has_alpha, color_space) = (image.config(), image.has_alpha(), image.color_space());
     IMAGES.with(|images| {
         let mut images = images.borrow_mut();
         if let Some((alive, skia)) = images.get(&id)
@@ -915,14 +1016,27 @@ fn skia_image(image: &compose_ui::ImageBitmap) -> Option<skia_safe::Image> {
         {
             return Some(skia.clone());
         }
-        let info = skia_safe::ImageInfo::new(
-            (image.width() as i32, image.height() as i32),
-            skia_safe::ColorType::RGBA8888,
-            skia_safe::AlphaType::Premul,
-            None,
-        );
-        let data = skia_safe::Data::new_copy(&pixels);
-        let skia = skia_safe::images::raster_from_data(&info, data, image.width() as usize * 4)?;
+        let skia = if is_direct_srgb(config, color_space) {
+            let info = skia_bitmap_info(image.width(), image.height(), config, has_alpha);
+            let data = skia_safe::Data::new_copy(&pixels);
+            let row_bytes = image.width() as usize * config.bytes_per_pixel();
+            skia_safe::images::raster_from_data(&info, data, row_bytes)?
+        } else {
+            let f16 = compose_ui::platform::image_to_extended_srgb_f16(
+                &pixels,
+                config,
+                has_alpha,
+                color_space,
+            );
+            let info = skia_bitmap_info(
+                image.width(),
+                image.height(),
+                compose_ui::ImageBitmapConfig::F16,
+                true,
+            );
+            let data = skia_safe::Data::new_copy(&f16);
+            skia_safe::images::raster_from_data(&info, data, image.width() as usize * 8)?
+        };
         images.insert(id, (std::sync::Arc::downgrade(&pixels), skia.clone()));
         Some(skia)
     })
@@ -934,20 +1048,49 @@ fn skia_image(image: &compose_ui::ImageBitmap) -> Option<skia_safe::Image> {
 pub struct SkiaBitmapRasterizer;
 
 impl compose_ui::platform::BitmapRasterizer for SkiaBitmapRasterizer {
-    fn draw(&self, list: &DisplayList, width: u32, height: u32, pixels: &mut [u8]) {
-        let info = skia_safe::ImageInfo::new(
-            (width as i32, height as i32),
-            skia_safe::ColorType::RGBA8888,
-            skia_safe::AlphaType::Premul,
-            None,
+    fn draw(
+        &self,
+        list: &DisplayList,
+        width: u32,
+        height: u32,
+        config: compose_ui::ImageBitmapConfig,
+        has_alpha: bool,
+        color_space: &compose_ui::colorspace::ColorSpace,
+        pixels: &mut [u8],
+    ) {
+        let measurer = compose_ui::platform::FixedTextMeasurer::default();
+        if is_direct_srgb(config, color_space) {
+            let info = skia_bitmap_info(width, height, config, has_alpha);
+            let row_bytes = width as usize * config.bytes_per_pixel();
+            let Some(mut surface) =
+                skia_safe::surfaces::wrap_pixels(&info, pixels, row_bytes, None)
+            else {
+                return;
+            };
+            draw_display_list(surface.canvas(), list, &measurer);
+            return;
+        }
+        let mut f16 = compose_ui::platform::image_to_extended_srgb_f16(
+            pixels,
+            config,
+            has_alpha,
+            color_space,
         );
+        let info = skia_bitmap_info(width, height, compose_ui::ImageBitmapConfig::F16, has_alpha);
         let Some(mut surface) =
-            skia_safe::surfaces::wrap_pixels(&info, pixels, width as usize * 4, None)
+            skia_safe::surfaces::wrap_pixels(&info, &mut f16, width as usize * 8, None)
         else {
             return;
         };
-        let measurer = compose_ui::platform::FixedTextMeasurer::default();
         draw_display_list(surface.canvas(), list, &measurer);
+        drop(surface);
+        compose_ui::platform::extended_srgb_f16_to_image(
+            &f16,
+            pixels,
+            config,
+            has_alpha,
+            color_space,
+        );
     }
 }
 

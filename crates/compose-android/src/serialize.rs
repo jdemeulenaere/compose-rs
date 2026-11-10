@@ -27,13 +27,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
 use compose_ui::{
-    BlendMode, Color, ColorFilter, CompositingStrategy, ImageBitmap, Offset, Outline, Paint,
-    PaintStyle, PathCommand, PathData, PathFillType, PathOperation, PathStep, Rect, StrokeCap,
-    TileMode,
-    platform::Shader,
+    BlendMode, Color, ColorFilter, CompositingStrategy, ImageBitmap, ImageBitmapConfig, Offset,
+    Outline, Paint, PaintStyle, PathCommand, PathData, PathFillType, PathOperation, PathStep, Rect,
+    Shader, StrokeCap, TileMode,
+    colorspace::ColorSpace,
     platform::{
-        DisplayList, DrawGroup, DrawOp, Optimization, Optimizations, fits_in, single_drawing,
-        single_drawing_extent,
+        DisplayList, DrawGroup, DrawOp, Optimization, Optimizations, PaintShader, fits_in,
+        image_to_extended_srgb_f16, single_drawing, single_drawing_extent,
     },
 };
 
@@ -50,6 +50,9 @@ pub mod tag {
     pub const DRAW_PARAGRAPH: u8 = 8;
     pub const SAVE_LAYER_ALPHA: u8 = 9;
     pub const TRANSFORM: u8 = 10;
+    /// A bitmap's part drawn into a rectangle: its id (u32), source and destination (left,
+    /// top, right, bottom), alpha (f32), whether it's filtered (u8: 0 for `FilterQuality::None`),
+    /// color filter.
     pub const DRAW_IMAGE: u8 = 11;
     pub const DRAW_SHADOW: u8 = 12;
     pub const DRAW_ARC: u8 = 13;
@@ -101,6 +104,10 @@ pub mod tag {
     /// vertex count (u32), positions and texture coordinates (an x, y pair each), colors
     /// (ARGB), the index count (u32) and indices (u16 each), the blend mode (u8), a paint.
     pub const DRAW_VERTICES: u8 = 28;
+    /// A bitmap of a non-default config or color space: id (u32), width, height (u32 each),
+    /// config (u8: 0 Argb8888, 1 Alpha8, 2 Rgb565, 3 F16), has_alpha (u8), color space id (u8,
+    /// `0..=13` matching Compose/Android `ColorSpace.Named`), byte length (u32), pixels.
+    pub const DEFINE_IMAGE_WITH: u8 = 29;
 }
 
 /// What follows a `BEGIN_EDGE_EFFECTS` tag up to what it holds: its operands and that length.
@@ -149,7 +156,7 @@ pub mod paint_flag {
 pub use paint_flag::COLOR_LONG;
 
 /// A recording's shaders and color filters, which its paints, images and layers name by index.
-type Tables<'a> = (&'a [Shader], &'a [ColorFilter]);
+type Tables<'a> = (&'a [PaintShader], &'a [ColorFilter]);
 
 /// A paint's shader kind, as `Replayer.kt` reads it.
 pub mod shader {
@@ -157,6 +164,15 @@ pub mod shader {
     pub const LINEAR: u8 = 1;
     pub const RADIAL: u8 = 2;
     pub const SWEEP: u8 = 3;
+    /// A bitmap's pixels (`ImageShader`): its tile modes (x, y: u8 each), its image's id (u32).
+    pub const IMAGE: u8 = 4;
+    /// Two shaders blended (`CompositeShader`): the blend mode (u8, Compose's order), then the
+    /// destination's definition and the source's, each from its kind byte.
+    pub const COMPOSITE: u8 = 5;
+    /// Or'ed into a paint's shader kind: its local matrix follows its definition, nine f32s
+    /// row-major (scale x, skew x, translate x, skew y, scale y, translate y, perspective), as
+    /// `android.graphics.Matrix.setValues` takes them (D2405).
+    pub const LOCAL_MATRIX: u8 = 0x80;
 }
 
 /// Little-endian writes into a byte buffer.
@@ -206,7 +222,13 @@ impl Writer {
     /// what they were before any. Faded by `alpha` (folded layers'): its color's alpha, or
     /// its shader's. A gradient that is a solid color (see [`shading`]) is that color at the
     /// shader's alpha, with no shader.
-    fn paint(&mut self, paint: &Paint, (shaders, filters): Tables<'_>, alpha: f32) {
+    fn paint(
+        &mut self,
+        paint: &Paint,
+        (shaders, filters): Tables<'_>,
+        alpha: f32,
+        resources: &mut Resources,
+    ) {
         let shading = paint
             .shader()
             .and_then(|index| shaders.get(index.index()))
@@ -215,7 +237,7 @@ impl Writer {
             Shading::Solid(color, opacity) => {
                 color.with_alpha(color.alpha() * opacity.clamp(0.0, 1.0))
             }
-            Shading::Color | Shading::Gradient(_) => paint.color,
+            Shading::Color | Shading::Shader(_) => paint.color,
         };
         self.color(faded(color, alpha));
         // Most paints are plain: no flag to work out.
@@ -256,8 +278,8 @@ impl Writer {
             StrokeCap::Square => 2,
         });
         match shading {
-            Shading::Gradient(shader) => {
-                self.shader(shader, shader.alpha() * alpha.clamp(0.0, 1.0));
+            Shading::Shader(shader) => {
+                self.shader(shader, shader.alpha() * alpha.clamp(0.0, 1.0), resources);
             }
             Shading::Color | Shading::Solid(..) => self.u8(shader::NONE),
         }
@@ -298,14 +320,45 @@ impl Writer {
             }
         }
     }
-    /// A shader's definition, then its alpha: its kind (a [`shader`] constant), tile mode (0
-    /// clamp, 1 repeated, 2 mirror, 3 decal), geometry (linear: from x, y, to x, y; radial:
-    /// center x, y, radius; sweep: center x, y), color count (u32, 2 at least: one color is
-    /// written twice), colors (ARGB), stop count (u32: 0 for evenly spread colors, else the
-    /// color count), stops, then the alpha the paint has (f32). The definition (kind to stops)
-    /// is what `Replayer.kt` keeps its `Shader` objects by.
-    fn shader(&mut self, shader: &Shader, alpha: f32) {
-        let gradient = shader.gradient();
+    /// A shader's definition (see [`Writer::plain_shader`]), its local matrix if it has a
+    /// transform (its kind or'ed with [`shader::LOCAL_MATRIX`]), then the alpha the paint has
+    /// (f32). The definition and matrix are what `Replayer.kt` keeps its `Shader` objects by.
+    fn shader(&mut self, shader: &PaintShader, alpha: f32, resources: &mut Resources) {
+        let flag = if shader.transform.is_some() { shader::LOCAL_MATRIX } else { 0 };
+        self.plain_shader(&shader.shader, flag, resources);
+        if let Some(matrix) = &shader.transform {
+            let v = &matrix.values;
+            for value in [v[0], v[4], v[12], v[1], v[5], v[13], v[3], v[7], v[15]] {
+                self.f32(value);
+            }
+        }
+        self.f32(alpha.clamp(0.0, 1.0));
+    }
+    /// A shader's definition: its kind (a [`shader`] constant, or'ed with `flag`), then for a
+    /// gradient its tile mode (0 clamp, 1 repeated, 2 mirror, 3 decal), geometry (linear: from
+    /// x, y, to x, y; radial: center x, y, radius; sweep: center x, y), color count (u32, 2 at
+    /// least: one color is written twice), colors (ARGB), stop count (u32: 0 for evenly spread
+    /// colors, else the color count), stops; for a bitmap its tile modes and image (defined in
+    /// `resources` if new); for a composite its blend mode and its two shaders'.
+    fn plain_shader(&mut self, shader: &Shader, flag: u8, resources: &mut Resources) {
+        let gradient = match shader {
+            Shader::Image { image, tile_mode_x, tile_mode_y } => {
+                let id = resources.image_id(image);
+                self.u8(shader::IMAGE | flag);
+                self.u8(tile_mode_byte(*tile_mode_x));
+                self.u8(tile_mode_byte(*tile_mode_y));
+                self.u32(id);
+                return;
+            }
+            Shader::Composite(composite) => {
+                self.u8(shader::COMPOSITE | flag);
+                self.u8(composite.blend_mode as u8);
+                self.plain_shader(&composite.dst, 0, resources);
+                self.plain_shader(&composite.src, 0, resources);
+                return;
+            }
+            gradient => gradient.gradient().expect("a gradient"),
+        };
         let colors = &gradient.colors;
         // A gradient needs two colors: one is a solid color, as compose-skia draws it.
         let count = colors.len().max(2);
@@ -319,22 +372,23 @@ impl Writer {
             tile_mode_byte(gradient.tile_mode) | if longs.is_some() { WIDE_GRADIENT } else { 0 };
         match shader {
             Shader::LinearGradient { from, to, .. } => {
-                self.u8(shader::LINEAR);
+                self.u8(shader::LINEAR | flag);
                 self.u8(tile_mode);
                 self.offset(*from);
                 self.offset(*to);
             }
             Shader::RadialGradient { center, radius, .. } => {
-                self.u8(shader::RADIAL);
+                self.u8(shader::RADIAL | flag);
                 self.u8(tile_mode);
                 self.offset(*center);
                 self.f32(*radius);
             }
             Shader::SweepGradient { center, .. } => {
-                self.u8(shader::SWEEP);
+                self.u8(shader::SWEEP | flag);
                 self.u8(tile_mode);
                 self.offset(*center);
             }
+            Shader::Image { .. } | Shader::Composite(_) => unreachable!("not a gradient"),
         }
         self.u32(count as u32);
         for index in 0..count {
@@ -353,7 +407,6 @@ impl Writer {
         for long in longs.into_iter().flatten() {
             self.u64(long);
         }
-        self.f32(alpha.clamp(0.0, 1.0));
     }
     /// Kind (0 rectangle, 1 rounded), bounds, radii. A path's outline is its bounds' rectangle
     /// (the replayer skips flattened shadows, which a render node draws).
@@ -392,8 +445,8 @@ fn tile_mode_byte(tile_mode: TileMode) -> u8 {
 enum Shading<'a> {
     /// The paint's color (no shader, or one Skia doesn't make: the gradient's average, D175).
     Color,
-    /// The gradient.
-    Gradient(&'a Shader),
+    /// The shader.
+    Shader(&'a PaintShader),
     /// A solid color at an alpha (the shader's): a degenerate gradient.
     Solid(Color, f32),
 }
@@ -404,21 +457,17 @@ const DEGENERATE_RADIUS: f32 = 1.0 / (1 << 15) as f32;
 /// How `shader` paints, as compose-skia's Skia draws it: no colors, a position not finite or a
 /// negative radius make no shader (the paint's color paints); a radius of (nearly) 0, which
 /// Android's `RadialGradient` refuses, is Skia's degenerate gradient: its last color when
-/// clamped, its average when repeated or mirrored, nothing with decal.
-fn shading(shader: &Shader) -> Shading<'_> {
-    let finite = |offset: &Offset| offset.x.is_finite() && offset.y.is_finite();
-    let gradient = shader.gradient();
-    if gradient.colors.is_empty() {
+/// clamped, its average when repeated or mirrored, nothing with decal. A bitmap of no pixels,
+/// and a composite of a shader that isn't one of these whole, make none either (D2405).
+fn shading(shader: &PaintShader) -> Shading<'_> {
+    let Some(gradient) = shader.gradient() else {
+        return if drawable(&shader.shader) { Shading::Shader(shader) } else { Shading::Color };
+    };
+    if !drawable(&shader.shader) {
         return Shading::Color;
     }
-    match shader {
-        Shader::LinearGradient { from, to, .. } if !finite(from) || !finite(to) => Shading::Color,
-        Shader::RadialGradient { center, radius, .. }
-            if !finite(center) || !radius.is_finite() || *radius < 0.0 =>
-        {
-            Shading::Color
-        }
-        Shader::RadialGradient { radius, .. } if *radius <= DEGENERATE_RADIUS => {
+    match shader.shader {
+        Shader::RadialGradient { radius, .. } if radius <= DEGENERATE_RADIUS => {
             let color = match gradient.tile_mode {
                 TileMode::Clamp => *gradient.colors.last().expect("colors"),
                 TileMode::Repeated | TileMode::Mirror => average_color(gradient),
@@ -426,8 +475,35 @@ fn shading(shader: &Shader) -> Shading<'_> {
             };
             Shading::Solid(color, shader.alpha())
         }
-        Shader::SweepGradient { center, .. } if !finite(center) => Shading::Color,
-        _ => Shading::Gradient(shader),
+        _ => Shading::Shader(shader),
+    }
+}
+
+/// Whether Android makes `shader` as Skia does: a gradient with colors, its positions finite and
+/// its radius not negative (nor degenerate, inside a composite); a bitmap with pixels; a
+/// composite of two such.
+fn drawable(shader: &Shader) -> bool {
+    drawable_in(shader, false)
+}
+
+fn drawable_in(shader: &Shader, nested: bool) -> bool {
+    let finite = |offset: &Offset| offset.x.is_finite() && offset.y.is_finite();
+    if shader.gradient().is_some_and(|gradient| gradient.colors.is_empty()) {
+        return false;
+    }
+    match shader {
+        Shader::LinearGradient { from, to, .. } => finite(from) && finite(to),
+        Shader::RadialGradient { center, radius, .. } => {
+            finite(center)
+                && radius.is_finite()
+                && *radius >= 0.0
+                && !(nested && *radius <= DEGENERATE_RADIUS)
+        }
+        Shader::SweepGradient { center, .. } => finite(center),
+        Shader::Image { image, .. } => image.width() > 0 && image.height() > 0,
+        Shader::Composite(composite) => {
+            drawable_in(&composite.dst, true) && drawable_in(&composite.src, true)
+        }
     }
 }
 
@@ -473,7 +549,15 @@ fn average_color(gradient: &compose_ui::platform::Gradient) -> Color {
 /// A resource change the Kotlin side hasn't taken yet (a path's definition is a
 /// [`PendingPath`]).
 enum Pending {
-    Image { id: u32, width: u32, height: u32, pixels: Weak<[u8]> },
+    Image {
+        id: u32,
+        width: u32,
+        height: u32,
+        config: ImageBitmapConfig,
+        has_alpha: bool,
+        color_space: ColorSpace,
+        pixels: Weak<[u8]>,
+    },
     DropPath(u32),
     DropImage(u32),
 }
@@ -659,6 +743,9 @@ impl Resources {
             id,
             width: image.width(),
             height: image.height(),
+            config: image.config(),
+            has_alpha: image.has_alpha(),
+            color_space: image.color_space().clone(),
             pixels: weak,
         });
         id
@@ -715,16 +802,68 @@ impl Resources {
             write_path(out, pending.id, &path);
         }
         for op in self.pending.drain(..) {
-            if let Pending::Image { id, width, height, pixels } = op {
+            if let Pending::Image { id, width, height, config, has_alpha, color_space, pixels } = op
+            {
                 let Some(pixels) = pixels.upgrade() else { continue };
-                out.u8(tag::DEFINE_IMAGE);
-                out.u32(id);
-                out.u32(width);
-                out.u32(height);
-                out.u32(pixels.len() as u32);
-                out.bytes.extend_from_slice(&pixels);
+                if matches!(config, ImageBitmapConfig::Argb8888 | ImageBitmapConfig::Gpu)
+                    && has_alpha
+                    && color_space.is_srgb()
+                {
+                    out.u8(tag::DEFINE_IMAGE);
+                    out.u32(id);
+                    out.u32(width);
+                    out.u32(height);
+                    out.u32(pixels.len() as u32);
+                    out.bytes.extend_from_slice(&pixels);
+                } else {
+                    let (config_byte, cs_id, converted) =
+                        android_image_format(config, has_alpha, &color_space, &pixels);
+                    let bytes = converted.as_deref().unwrap_or(&pixels);
+                    out.u8(tag::DEFINE_IMAGE_WITH);
+                    out.u32(id);
+                    out.u32(width);
+                    out.u32(height);
+                    out.u8(config_byte);
+                    out.u8(u8::from(has_alpha));
+                    out.u8(cs_id);
+                    out.u32(bytes.len() as u32);
+                    out.bytes.extend_from_slice(bytes);
+                }
             }
         }
+    }
+}
+
+/// Maps `(config, color_space)` onto Android `Bitmap.Config` & `ColorSpace.Named` (`0..=13`):
+/// color spaces Android's bitmaps don't carry directly are converted to `EXTENDED_SRGB` `F16`.
+pub(crate) fn android_bitmap_format(
+    config: ImageBitmapConfig,
+    color_space: &ColorSpace,
+) -> Option<(u8, u8)> {
+    let config_byte = match config {
+        ImageBitmapConfig::Argb8888 | ImageBitmapConfig::Gpu => 0,
+        ImageBitmapConfig::Alpha8 => 1,
+        ImageBitmapConfig::Rgb565 => 2,
+        ImageBitmapConfig::F16 => 3,
+    };
+    let id = color_space.id();
+    if config == ImageBitmapConfig::Alpha8 || (0..=13).contains(&id) {
+        Some((config_byte, id.clamp(0, 13) as u8))
+    } else {
+        None
+    }
+}
+
+fn android_image_format(
+    config: ImageBitmapConfig,
+    has_alpha: bool,
+    color_space: &ColorSpace,
+    pixels: &[u8],
+) -> (u8, u8, Option<Vec<u8>>) {
+    if let Some((config_byte, cs_id)) = android_bitmap_format(config, color_space) {
+        (config_byte, cs_id, None)
+    } else {
+        (3, 2, Some(image_to_extended_srgb_f16(pixels, config, has_alpha, color_space)))
     }
 }
 
@@ -761,7 +900,7 @@ pub fn operand_bytes(bytes: &[u8], at: usize) -> usize {
         tag::SAVE_LAYER_ALPHA => 16 + 4,
         tag::SAVE_LAYER => 16 + 4 + 1 + color_filter_bytes(bytes, at + 1 + 16 + 4 + 1),
         tag::TRANSFORM => 28,
-        tag::DRAW_IMAGE => 4 + 32 + 4 + color_filter_bytes(bytes, at + 1 + 4 + 32 + 4),
+        tag::DRAW_IMAGE => 4 + 32 + 4 + 1 + color_filter_bytes(bytes, at + 1 + 4 + 32 + 4 + 1),
         tag::DRAW_SHADOW => 1 + 32 + 4 + 12 + 4 + 8,
         tag::DRAW_ARC => painted(16 + 8 + 1),
         tag::DRAW_PATH => painted(4 + 16),
@@ -769,26 +908,50 @@ pub fn operand_bytes(bytes: &[u8], at: usize) -> usize {
     }
 }
 
+/// The bytes of a paint's shader (`Writer::shader` or [`shader::NONE`]) at `at`.
+fn shader_bytes(bytes: &[u8], at: usize) -> usize {
+    let kind = bytes[at];
+    if kind == shader::NONE {
+        return 1;
+    }
+    let body = plain_shader_bytes(bytes, at);
+    let matrix = if kind & shader::LOCAL_MATRIX != 0 { 9 * 4 } else { 0 };
+    body + matrix + 4
+}
+
+fn plain_shader_bytes(bytes: &[u8], at: usize) -> usize {
+    let count_at = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+    let kind = bytes[at] & !shader::LOCAL_MATRIX;
+    match kind {
+        shader::LINEAR | shader::RADIAL | shader::SWEEP => {
+            let geometry = match kind {
+                shader::LINEAR => 16,
+                shader::RADIAL => 12,
+                shader::SWEEP => 8,
+                _ => unreachable!(),
+            };
+            let colors_at = at + 2 + geometry;
+            let stops_at = colors_at + 4 + 4 * count_at(colors_at);
+            let longs =
+                if bytes[at + 1] & WIDE_GRADIENT != 0 { 8 * count_at(colors_at) } else { 0 };
+            (stops_at + 4 + 4 * count_at(stops_at) + longs) - at
+        }
+        shader::IMAGE => 1 + 2 + 4,
+        shader::COMPOSITE => {
+            let dst = at + 2;
+            let dst_len = plain_shader_bytes(bytes, dst);
+            let src_len = plain_shader_bytes(bytes, dst + dst_len);
+            2 + dst_len + src_len
+        }
+        other => panic!("not a shader kind: {other}"),
+    }
+}
+
 /// The bytes of the paint at `at` ([`Writer::paint`]).
 fn paint_bytes(bytes: &[u8], at: usize) -> usize {
-    let count_at = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
     let flags = bytes[at + 4];
     let kind_at = at + 4 + 1 + 4 + 1;
-    let geometry = match bytes[kind_at] {
-        shader::NONE => 0,
-        shader::LINEAR => 16,
-        shader::RADIAL => 12,
-        shader::SWEEP => 8,
-        other => panic!("not a shader kind: {other}"),
-    };
-    let mut end = kind_at + 1;
-    if bytes[kind_at] != shader::NONE {
-        let colors_at = kind_at + 2 + geometry;
-        let stops_at = colors_at + 4 + 4 * count_at(colors_at);
-        let longs =
-            if bytes[kind_at + 1] & WIDE_GRADIENT != 0 { 8 * count_at(colors_at) } else { 0 };
-        end = stops_at + 4 + 4 * count_at(stops_at) + longs + 4;
-    }
+    let mut end = kind_at + shader_bytes(bytes, kind_at);
     if flags & paint_flag::BLEND_MODE != 0 {
         end += 1;
     }
@@ -1650,19 +1813,19 @@ fn write_op(
         DrawOp::DrawRect(rect, paint) => {
             out.u8(tag::DRAW_RECT);
             out.rect(rect);
-            out.paint(paint, tables, alpha);
+            out.paint(paint, tables, alpha, resources);
         }
         DrawOp::DrawRoundRect(rect, radii, paint) => {
             out.u8(tag::DRAW_ROUND_RECT);
             out.rect(rect);
             out.radii(radii);
-            out.paint(paint, tables, alpha);
+            out.paint(paint, tables, alpha, resources);
         }
         DrawOp::DrawLine(from, to, paint) => {
             out.u8(tag::DRAW_LINE);
             out.offset(*from);
             out.offset(*to);
-            out.paint(paint, tables, alpha);
+            out.paint(paint, tables, alpha, resources);
         }
         DrawOp::DrawParagraph(handle, offset) => {
             out.u8(tag::DRAW_PARAGRAPH);
@@ -1708,13 +1871,15 @@ fn write_op(
             out.f32(*rotation);
             out.offset(*translation);
         }
-        DrawOp::DrawImage { image, src, dst, alpha, color_filter } => {
+        DrawOp::DrawImage { image, src, dst, alpha, color_filter, filter_quality } => {
             let id = resources.image_id(image);
             out.u8(tag::DRAW_IMAGE);
             out.u32(id);
             out.rect(src);
             out.rect(dst);
             out.f32(*alpha);
+            // Android's paints filter bitmaps or don't (D2403).
+            out.u8(u8::from(*filter_quality != compose_ui::FilterQuality::None));
             out.color_filter(filter(color_filter));
         }
         DrawOp::DrawShadow { outline, elevation, light, light_radius, ambient, spot, .. } => {
@@ -1734,7 +1899,7 @@ fn write_op(
             out.f32(*start_angle);
             out.f32(*sweep_angle);
             out.u8(u8::from(*use_center));
-            out.paint(paint, tables, alpha);
+            out.paint(paint, tables, alpha, resources);
         }
         DrawOp::DrawPath { path, offset, scale, paint } => {
             let id = resources.path_id(path);
@@ -1743,7 +1908,7 @@ fn write_op(
             out.offset(*offset);
             out.f32(scale.0);
             out.f32(scale.1);
-            out.paint(paint, tables, alpha);
+            out.paint(paint, tables, alpha, resources);
         }
         DrawOp::ClipPath { path, offset } => {
             let id = resources.path_id(path);
@@ -1783,7 +1948,7 @@ fn write_op(
                 out.bytes.extend_from_slice(&index.to_le_bytes());
             }
             out.u8(*blend_mode as u8);
-            out.paint(paint, tables, alpha);
+            out.paint(paint, tables, alpha, resources);
         }
     }
 }
@@ -2008,7 +2173,7 @@ mod tests {
         use compose_ui::colorspace::ColorSpaces;
         let p3 = Color::new_with(0.9, 0.2, 0.1, 1.0, &ColorSpaces::DISPLAY_P3);
         let mut writer = Writer::default();
-        writer.paint(&Paint::fill(p3), (&[], &[]), 0.5);
+        writer.paint(&Paint::fill(p3), (&[], &[]), 0.5, &mut Resources::default());
         let long = u64::from_le_bytes(writer.bytes[11..19].try_into().unwrap());
         assert_eq!(writer.bytes[4], COLOR_LONG);
         assert_eq!(Color::from_value(long), p3.with_alpha(0.5));
@@ -2056,9 +2221,13 @@ mod tests {
         assert_eq!(constant("PAINT_BLUR"), paint_flag::BLUR);
         assert_eq!(constant("PAINT_COLOR_LONG"), COLOR_LONG);
         assert_eq!(constant("WIDE_GRADIENT"), WIDE_GRADIENT);
+        assert_eq!(constant("SHADER_IMAGE"), shader::IMAGE);
+        assert_eq!(constant("SHADER_COMPOSITE"), shader::COMPOSITE);
+        assert_eq!(constant("SHADER_LOCAL_MATRIX"), shader::LOCAL_MATRIX);
         assert_eq!(constant("CONCAT"), tag::CONCAT);
         assert_eq!(constant("CLIP_OUT_PATH"), tag::CLIP_OUT_PATH);
         assert_eq!(constant("DRAW_VERTICES"), tag::DRAW_VERTICES);
+        assert_eq!(constant("DEFINE_IMAGE_WITH"), tag::DEFINE_IMAGE_WITH);
         // The flags are read through these names only, never as bare numbers.
         assert!(!kotlin.contains("flags and 1 ") && !kotlin.contains("flags and 16 "));
         let table = kotlin.split("BLEND_MODES = arrayOf(").nth(1).expect("the modes").split(')');
@@ -2379,6 +2548,7 @@ mod tests {
             dst: Rect::new(0.0, 0.0, 1.0, 1.0),
             alpha: 1.0,
             color_filter: None,
+            filter_quality: compose_ui::FilterQuality::Low,
         });
         let mut out = Writer::default();
         write_display_list(&list, resources, &mut GroupCache::default(), &mut out);
@@ -2586,7 +2756,12 @@ mod tests {
         Gradient { colors: colors.into(), stops: stops.map(Into::into), tile_mode }
     }
 
-    fn gradient_rect(list: &mut DisplayList, shader: Shader) {
+    /// `shader` as a paint's, at `alpha`, untransformed.
+    fn shaded(shader: Shader, alpha: f32) -> PaintShader {
+        PaintShader { shader, transform: None, alpha }
+    }
+
+    fn gradient_rect(list: &mut DisplayList, shader: PaintShader) {
         let mut paint = Paint::fill(Color::BLACK);
         paint = paint.with_shader(list.push_shader(shader));
         list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 10.0, 10.0), paint));
@@ -2596,23 +2771,27 @@ mod tests {
     fn a_gradient_paint_carries_its_definition_and_alpha() {
         let mut list = DisplayList::default();
         // Another shader first: the paint's index is 1, its bytes its content.
-        list.push_shader(Shader::SweepGradient {
-            gradient: gradient(&[Color::RED, Color::BLUE], None, TileMode::Clamp),
-            center: Offset::ZERO,
-            alpha: 1.0,
-        });
+        list.push_shader(shaded(
+            Shader::SweepGradient {
+                gradient: gradient(&[Color::RED, Color::BLUE], None, TileMode::Clamp),
+                center: Offset::ZERO,
+            },
+            1.0,
+        ));
         gradient_rect(
             &mut list,
-            Shader::LinearGradient {
-                gradient: gradient(
-                    &[Color::RED, Color::GREEN, Color::BLUE],
-                    Some(&[0.0, 0.25, 1.0]),
-                    TileMode::Repeated,
-                ),
-                from: Offset::new(1.0, 2.0),
-                to: Offset::new(3.0, 4.0),
-                alpha: 0.5,
-            },
+            shaded(
+                Shader::LinearGradient {
+                    gradient: gradient(
+                        &[Color::RED, Color::GREEN, Color::BLUE],
+                        Some(&[0.0, 0.25, 1.0]),
+                        TileMode::Repeated,
+                    ),
+                    from: Offset::new(1.0, 2.0),
+                    to: Offset::new(3.0, 4.0),
+                },
+                0.5,
+            ),
         );
         let (mut resources, mut out) = (Resources::default(), Writer::default());
         write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
@@ -2693,7 +2872,7 @@ mod tests {
         let gradient = gradient(colors, None, TileMode::Clamp);
         gradient_rect(
             &mut list,
-            Shader::SweepGradient { gradient, center: Offset::ZERO, alpha: 1.0 },
+            shaded(Shader::SweepGradient { gradient, center: Offset::ZERO }, 1.0),
         );
         let (mut resources, mut out) = (Resources::default(), Writer::default());
         write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
@@ -2745,12 +2924,14 @@ mod tests {
         let mut list = DisplayList::default();
         gradient_rect(
             &mut list,
-            Shader::RadialGradient {
-                gradient: gradient(&[Color::RED], Some(&[0.5]), TileMode::Decal),
-                center: Offset::new(5.0, 5.0),
-                radius: 2.0,
-                alpha: 1.0,
-            },
+            shaded(
+                Shader::RadialGradient {
+                    gradient: gradient(&[Color::RED], Some(&[0.5]), TileMode::Decal),
+                    center: Offset::new(5.0, 5.0),
+                    radius: 2.0,
+                },
+                1.0,
+            ),
         );
         let (mut resources, mut out) = (Resources::default(), Writer::default());
         write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
@@ -2768,12 +2949,14 @@ mod tests {
     fn radial_written(radius: f32, tile_mode: TileMode) -> (Color, u8) {
         let mut list = DisplayList::default();
         let colors = [Color::RED, Color::GREEN, Color::BLUE];
-        let shader = Shader::RadialGradient {
-            gradient: gradient(&colors, Some(&[0.5, 0.75, 0.75]), tile_mode),
-            center: Offset::new(5.0, 5.0),
-            radius,
-            alpha: 0.5,
-        };
+        let shader = shaded(
+            Shader::RadialGradient {
+                gradient: gradient(&colors, Some(&[0.5, 0.75, 0.75]), tile_mode),
+                center: Offset::new(5.0, 5.0),
+                radius,
+            },
+            0.5,
+        );
         let mut paint = Paint::fill(Color::from_argb(0x8011_2233));
         paint = paint.with_shader(list.push_shader(shader));
         list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 10.0, 10.0), paint));
@@ -2840,11 +3023,13 @@ mod tests {
         list.push(DrawOp::SaveLayerAlpha { bounds: Rect::new(0.0, 0.0, 10.0, 10.0), alpha: 0.5 });
         gradient_rect(
             &mut list,
-            Shader::SweepGradient {
-                gradient: gradient(&[Color::RED, Color::BLUE], None, TileMode::Clamp),
-                center: Offset::new(5.0, 5.0),
-                alpha: 0.8,
-            },
+            shaded(
+                Shader::SweepGradient {
+                    gradient: gradient(&[Color::RED, Color::BLUE], None, TileMode::Clamp),
+                    center: Offset::new(5.0, 5.0),
+                },
+                0.8,
+            ),
         );
         list.push(DrawOp::Restore);
         let (mut resources, mut out) = (Resources::default(), Writer::default());
@@ -2880,5 +3065,78 @@ mod tests {
         let mut pending = Writer::default();
         resources.write_pending(&mut pending);
         assert_eq!((pending.bytes[0], read_u32(&pending.bytes, 1)), (tag::DEFINE_PATH, id));
+    }
+
+    #[test]
+    fn image_composite_and_local_matrix_shaders_and_filter_quality_serialize() {
+        use compose_ui::{Brush, ImageBitmapConfig, Matrix, ShaderBrush, colorspace::ColorSpaces};
+
+        let img = ImageBitmap::from_rgba_premultiplied(2, 1, vec![255; 8]);
+        let grad = Shader::linear_gradient(
+            Offset::ZERO,
+            Offset::new(10.0, 0.0),
+            [Color::RED, Color::BLUE],
+            TileMode::Repeated,
+        );
+        let img_shader = Shader::image(&img, TileMode::Mirror, TileMode::Decal);
+        let composite = Shader::composite(img_shader, grad, BlendMode::SrcIn);
+        let brush = ShaderBrush::new(composite);
+        brush.set_transform(Some(Matrix::translation(3.0, 4.0)));
+        let paint_shader = Brush::from(brush)
+            .shader(compose_ui::Size::new(10.0, 10.0), Offset::ZERO, 1.0)
+            .unwrap();
+
+        let mut list = DisplayList::default();
+        let idx = list.push_shader(paint_shader);
+        list.push(DrawOp::DrawRect(
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            Paint::fill(Color::BLACK).with_shader(idx),
+        ));
+        list.push(DrawOp::DrawImage {
+            image: img.clone(),
+            src: Rect::new(0.0, 0.0, 2.0, 1.0),
+            dst: Rect::new(0.0, 0.0, 4.0, 2.0),
+            alpha: 1.0,
+            color_filter: None,
+            filter_quality: compose_ui::FilterQuality::None,
+        });
+        list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 1.0, 1.0), Paint::fill(Color::RED)));
+
+        let (mut resources, mut out) = (Resources::default(), Writer::default());
+        write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
+        let rect_len = operand_bytes(&out.bytes, 0);
+        let img_at = 1 + rect_len;
+        assert_eq!(out.bytes[img_at], tag::DRAW_IMAGE);
+        // Filter byte before color_filter: 0 for FilterQuality::None.
+        assert_eq!(out.bytes[img_at + 1 + 4 + 32 + 4], 0);
+        let img_len = operand_bytes(&out.bytes, img_at);
+        assert_eq!(out.bytes[img_at + 1 + img_len], tag::DRAW_RECT);
+        let shader_at = 1 + 16 + 4 + 1 + 4 + 1;
+        assert_eq!(out.bytes[shader_at], shader::COMPOSITE | shader::LOCAL_MATRIX);
+
+        let mut pending = Writer::default();
+        resources.write_pending(&mut pending);
+        assert_eq!(pending.bytes[0], tag::DEFINE_IMAGE);
+
+        // Non-default configs/color spaces emit DEFINE_IMAGE_WITH.
+        let p3_bmp =
+            ImageBitmap::new_with(1, 1, ImageBitmapConfig::F16, true, &ColorSpaces::DISPLAY_P3);
+        let mut p3_list = DisplayList::default();
+        p3_list.push(DrawOp::DrawImage {
+            image: p3_bmp,
+            src: Rect::new(0.0, 0.0, 1.0, 1.0),
+            dst: Rect::new(0.0, 0.0, 1.0, 1.0),
+            alpha: 1.0,
+            color_filter: None,
+            filter_quality: compose_ui::FilterQuality::Low,
+        });
+        let mut out2 = Writer::default();
+        write_display_list(&p3_list, &mut resources, &mut GroupCache::default(), &mut out2);
+        let mut pending2 = Writer::default();
+        resources.write_pending(&mut pending2);
+        assert_eq!(pending2.bytes[0], tag::DEFINE_IMAGE_WITH);
+        assert_eq!(pending2.bytes[13], 3); // F16
+        assert_eq!(pending2.bytes[14], 1); // has_alpha
+        assert_eq!(pending2.bytes[15], ColorSpaces::DISPLAY_P3.id() as u8);
     }
 }

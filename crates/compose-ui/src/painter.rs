@@ -7,12 +7,13 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::alignment::{Alignment, LayoutDirection};
+use crate::brush::Brush;
 use crate::color_filter::{BlendMode, ColorFilter};
 use crate::constraints::Constraints;
 use crate::content_scale::ContentScale;
 use crate::draw::DrawScope;
-use crate::graphics::Paint;
-use crate::image::ImageBitmap;
+use crate::graphics::{Paint, PaintStyle};
+use crate::image::{FilterQuality, ImageBitmap};
 use crate::layout::{IntrinsicMeasureScope, Measurable, MeasureResult, MeasureScope};
 use crate::modifier::{
     DrawModifierNode, InspectorInfo, LayoutModifierNode, Modifier, ModifierNode,
@@ -186,13 +187,13 @@ impl compose_runtime::ComposeArg for Painter {
 }
 
 /// A bitmap, or a part of it, as Compose's `BitmapPainter`: its intrinsic size the part's,
-/// stretched to the size it's drawn at, faded and filtered itself. Equal to another of the
-/// same image, part (and filter quality, which compose-rs doesn't have: bitmaps are filtered
-/// linearly, as `FilterQuality.Low`).
+/// stretched to the size it's drawn at (sampled as its filter quality says), faded and filtered
+/// itself. Equal to another of the same image, part and filter quality.
 pub struct BitmapPainter {
     image: ImageBitmap,
     src_offset: IntOffset,
     src_size: IntSize,
+    filter_quality: FilterQuality,
     alpha: Cell<f32>,
     color_filter: Cell<Option<ColorFilter>>,
 }
@@ -228,9 +229,21 @@ impl BitmapPainter {
             image,
             src_offset,
             src_size,
+            filter_quality: FilterQuality::Low,
             alpha: Cell::new(1.0),
             color_filter: Cell::new(None),
         }
+    }
+
+    /// `with_source`, sampled as `filter_quality` says, as `BitmapPainter(image, srcOffset,
+    /// srcSize, filterQuality)` (Compose's default: `FilterQuality::Low`).
+    pub fn with_filter_quality(
+        image: ImageBitmap,
+        src_offset: IntOffset,
+        src_size: IntSize,
+        filter_quality: FilterQuality,
+    ) -> Self {
+        BitmapPainter { filter_quality, ..BitmapPainter::with_source(image, src_offset, src_size) }
     }
 }
 
@@ -245,7 +258,8 @@ impl CustomPainter for BitmapPainter {
         let size = scope.size();
         let dst = Rect::new(0.0, 0.0, size.width.round(), size.height.round());
         let filter = self.color_filter.get();
-        scope.draw_image_filtered(&self.image, src, dst, self.alpha.get(), filter.as_ref());
+        let (image, alpha, quality) = (&self.image, self.alpha.get(), self.filter_quality);
+        scope.draw_image_with(image, src, dst, alpha, filter.as_ref(), quality);
     }
 
     fn apply_alpha(&self, alpha: f32) -> bool {
@@ -263,7 +277,52 @@ impl CustomPainter for BitmapPainter {
             other.image.same_image(&self.image)
                 && other.src_offset == self.src_offset
                 && other.src_size == self.src_size
+                && other.filter_quality == self.filter_quality
         })
+    }
+}
+
+/// A brush filling the size it's drawn at, as Compose's `BrushPainter`: its intrinsic size the
+/// brush's ([`Brush::intrinsic_size`]), faded and filtered itself; equal to another of an equal
+/// brush.
+#[derive(Debug)]
+pub struct BrushPainter {
+    pub brush: Brush,
+    alpha: Cell<f32>,
+    color_filter: Cell<Option<ColorFilter>>,
+}
+
+impl BrushPainter {
+    /// As `BrushPainter(brush)`.
+    pub fn new(brush: impl Into<Brush>) -> BrushPainter {
+        BrushPainter { brush: brush.into(), alpha: Cell::new(1.0), color_filter: Cell::new(None) }
+    }
+}
+
+impl CustomPainter for BrushPainter {
+    fn intrinsic_size(&self) -> Size {
+        self.brush.intrinsic_size()
+    }
+
+    fn on_draw(&self, scope: &mut DrawScope<'_>) {
+        let paint = scope.brush_paint(&self.brush, self.alpha.get(), PaintStyle::Fill);
+        let paint = scope.paint_with_color_filter(paint, self.color_filter.get().as_ref());
+        let bounds = scope.bounds();
+        scope.draw_rect(bounds, paint);
+    }
+
+    fn apply_alpha(&self, alpha: f32) -> bool {
+        self.alpha.set(alpha);
+        true
+    }
+
+    fn apply_color_filter(&self, color_filter: Option<&ColorFilter>) -> bool {
+        self.color_filter.set(color_filter.copied());
+        true
+    }
+
+    fn same(&self, other: &dyn CustomPainter) -> bool {
+        other.downcast_ref::<BrushPainter>().is_some_and(|other| other.brush == self.brush)
     }
 }
 

@@ -377,6 +377,7 @@ impl ModifierNodeElement for TextElement {
             selection_color: self.selection_color,
             version: 0,
             paragraphs: Paragraphs::of(&self.text),
+            custom_shaders: None,
         }
     }
 
@@ -398,6 +399,7 @@ impl ModifierNodeElement for TextElement {
             node.min_lines = self.min_lines;
             node.min_height = None;
             node.restyle = false;
+            node.custom_shaders = None;
             let probe = node.probe.take().map(|probe| probe.paragraph);
             node.stale.extend(node.paragraph.take().into_iter().chain(probe));
             node.constraints = None;
@@ -409,6 +411,7 @@ impl ModifierNodeElement for TextElement {
             // again in the new paint, as Compose's `updateDraw` (`hasSameDrawAffectingAttributes`).
             node.style = self.style.clone();
             node.restyle = true;
+            node.custom_shaders = None;
         }
         node.selectable = self.selectable;
         node.selection_color = self.selection_color;
@@ -502,6 +505,127 @@ pub(crate) struct TextNode {
     /// where `paragraph` and `probe` stay `None` (D2053). A text without them has none, and lays
     /// out as one platform paragraph.
     paragraphs: Option<Box<Paragraphs>>,
+    /// Dynamic [`CustomShaderBrush`] state read during draw (`Observation::Draw`), so toggling
+    /// state read by `create_shader` invalidates and restyles without recomposing or remeasuring
+    /// (D2406).
+    custom_shaders: Option<Box<TextCustomShaders>>,
+}
+
+#[derive(Clone, PartialEq)]
+struct ResolvedTextShaders {
+    style: Option<TextStyle>,
+    spans: Vec<Option<compose_ui::Brush>>,
+}
+
+struct TextCustomShaders {
+    size: compose_ui::Size,
+    derived: compose::DerivedState<ResolvedTextShaders>,
+    drawn: Option<ResolvedTextShaders>,
+}
+
+impl TextCustomShaders {
+    fn new(size: compose_ui::Size, text: &AnnotatedString, style: &TextStyle) -> TextCustomShaders {
+        let style_fg = style.foreground();
+        let base_style = style_fg
+            .brush()
+            .filter(|brush| brush.is_dynamic_shader())
+            .map(|brush| (style.clone(), brush.clone(), style_fg.alpha()));
+        let span_brushes: Vec<Option<compose_ui::Brush>> = if has_dynamic_span_shaders(text) {
+            text.annotations()
+                .iter()
+                .map(|range| match &range.item {
+                    compose_ui::Annotation::SpanStyle(span) => {
+                        span.foreground().brush().filter(|b| b.is_dynamic_shader()).cloned()
+                    }
+                    _ => None,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let derived = compose::derived_state_of(move || ResolvedTextShaders {
+            style: base_style.as_ref().map(|(s, brush, alpha)| {
+                s.clone().with_brush(Some(brush.resolved_at(size)), *alpha)
+            }),
+            spans: span_brushes
+                .iter()
+                .map(|entry| entry.as_ref().map(|brush| brush.resolved_at(size)))
+                .collect(),
+        });
+        TextCustomShaders { size, derived, drawn: None }
+    }
+}
+
+fn has_dynamic_span_shaders(text: &AnnotatedString) -> bool {
+    text.annotations().iter().any(|range| {
+        matches!(
+            &range.item,
+            compose_ui::Annotation::SpanStyle(span)
+                if span.foreground().brush().is_some_and(compose_ui::Brush::is_dynamic_shader)
+        )
+    })
+}
+
+fn has_dynamic_shaders(text: &AnnotatedString, style: &TextStyle) -> bool {
+    style.foreground().brush().is_some_and(compose_ui::Brush::is_dynamic_shader)
+        || has_dynamic_span_shaders(text)
+}
+
+fn placeholder_style(style: &TextStyle) -> Option<TextStyle> {
+    let fg = style.foreground();
+    fg.brush().is_some_and(compose_ui::Brush::is_dynamic_shader).then(|| {
+        style
+            .clone()
+            .with_brush(Some(compose_ui::Brush::Solid(compose_ui::Color::BLACK)), fg.alpha())
+    })
+}
+
+fn replace_range<T>(
+    range: &compose_ui::AnnotatedRange<T>,
+    item: T,
+) -> compose_ui::AnnotatedRange<T> {
+    if range.tag.is_empty() {
+        compose_ui::AnnotatedRange::new(item, range.start, range.end)
+    } else {
+        compose_ui::AnnotatedRange::tagged(item, range.start, range.end, range.tag.clone())
+    }
+}
+
+fn placeholder_text(text: &AnnotatedString) -> AnnotatedString {
+    text.map_annotations(|range| match &range.item {
+        compose_ui::Annotation::SpanStyle(span)
+            if span.foreground().brush().is_some_and(compose_ui::Brush::is_dynamic_shader) =>
+        {
+            replace_range(
+                range,
+                compose_ui::Annotation::SpanStyle(span.clone().with_brush(
+                    Some(compose_ui::Brush::Solid(compose_ui::Color::BLACK)),
+                    span.foreground().alpha(),
+                )),
+            )
+        }
+        _ => range.clone(),
+    })
+}
+
+fn apply_resolved_spans(
+    text: &AnnotatedString,
+    resolved: &[Option<compose_ui::Brush>],
+) -> AnnotatedString {
+    let mut index = 0usize;
+    text.map_annotations(|range| {
+        let slot = resolved.get(index).and_then(Option::as_ref);
+        index += 1;
+        match (&range.item, slot) {
+            (compose_ui::Annotation::SpanStyle(span), Some(brush)) => replace_range(
+                range,
+                compose_ui::Annotation::SpanStyle(
+                    span.clone().with_brush(Some(brush.clone()), span.foreground().alpha()),
+                ),
+            ),
+            _ => range.clone(),
+        }
+    })
 }
 
 /// A text with paragraph styles laid out as Compose's `MultiParagraphLayoutCache` lays it out
@@ -608,6 +732,19 @@ fn final_max_lines(input: &compose_ui::TextLayoutInput) -> u32 {
 }
 
 impl TextNode {
+    fn sync_custom_shaders(&mut self, painted_size: compose_ui::Size, invalidate_drawn: bool) {
+        if has_dynamic_shaders(&self.text, &self.style) {
+            if self.custom_shaders.as_ref().is_none_or(|c| c.size != painted_size) {
+                self.custom_shaders =
+                    Some(Box::new(TextCustomShaders::new(painted_size, &self.text, &self.style)));
+            } else if invalidate_drawn && let Some(custom) = &mut self.custom_shaders {
+                custom.drawn = None;
+            }
+        } else {
+            self.custom_shaders = None;
+        }
+    }
+
     /// Lays the text out for `constraints` if Compose's rule says the paragraph would differ
     /// ([`new_layout_will_be_different`]); returns whether it did.
     fn lay_out(
@@ -651,9 +788,12 @@ impl TextNode {
                 if let Some(old) = self.paragraph.take() {
                     measurer.release(old);
                 }
+                let layout_text =
+                    has_dynamic_span_shaders(&self.text).then(|| placeholder_text(&self.text));
+                let layout_style = placeholder_style(&self.style);
                 measurer.layout_annotated(
-                    &self.text,
-                    &self.style,
+                    layout_text.as_ref().unwrap_or(&self.text),
+                    layout_style.as_ref().unwrap_or(&self.style),
                     TextLayoutOptions { direction, ..self.options },
                     constraints,
                     &density,
@@ -851,8 +991,10 @@ impl TextNode {
         let resolver = scope.current_value_of(&compose_ui::LOCAL_FONT_FAMILY_RESOLVER);
         let locales = scope.current_value_of(&compose_ui::LOCAL_LOCALE_LIST);
         let style = TextStyle::resolve_defaults(&self.style, direction);
+        let layout_text =
+            has_dynamic_span_shaders(&self.text).then(|| placeholder_text(&self.text));
         let intrinsics = Rc::new(compose_ui::MultiParagraphIntrinsics::new(
-            self.text.clone(),
+            layout_text.unwrap_or_else(|| self.text.clone()),
             &style,
             &[],
             density,
@@ -893,8 +1035,13 @@ impl TextNode {
         });
         if !kept {
             let from = self.paragraph_intrinsics(scope);
-            let multi_paragraph =
-                lay_out_paragraphs(&from.intrinsics, options, constraints, Some(&self.style));
+            let layout_style = placeholder_style(&self.style);
+            let multi_paragraph = lay_out_paragraphs(
+                &from.intrinsics,
+                options,
+                constraints,
+                Some(layout_style.as_ref().unwrap_or(&self.style)),
+            );
             let paragraphs = self.paragraphs.as_mut().expect("a text of paragraphs");
             paragraphs.layout = Some(ParagraphsLayout {
                 multi_paragraph: Rc::new(multi_paragraph),
@@ -906,9 +1053,11 @@ impl TextNode {
         let relaid = !kept;
         let paragraphs = self.paragraphs.as_mut().expect("a text of paragraphs");
         let layout = paragraphs.layout.as_mut().expect("laid out");
+        let paint_style = placeholder_style(&self.style);
         if kept
             && restyle
-            && let Some(painted) = layout.multi_paragraph.in_paint_of(&self.style)
+            && let Some(painted) =
+                layout.multi_paragraph.in_paint_of(paint_style.as_ref().unwrap_or(&self.style))
         {
             // The kept layout in the new paint: its paragraphs swapped for their copies in it,
             // so the ones laid out in the old paint go (D2054), as a plain text's restyle
@@ -921,11 +1070,13 @@ impl TextNode {
         let width = own_width.min(multi_paragraph.width());
         let natural =
             compose_ui::IntSize::new(width.ceil() as i32, multi_paragraph.height().ceil() as i32);
+        let painted_size = compose_ui::Size::new(width, multi_paragraph.height());
         // The result's size, as Compose's (in the final constraints); the node's in its own.
         let size = constraints.constrain(natural);
         let node_size = incoming.constrain(size);
         layout.constraints = constraints;
         layout.size = size;
+        self.sync_custom_shaders(painted_size, relaid || restyle);
         // Compose's `hasVisualOverflow`: clipped where it's larger than the node, or cut by its
         // maximum lines.
         self.overflows = (node_size.width as f32) < multi_paragraph.width()
@@ -1056,7 +1207,8 @@ impl LayoutModifierNode for TextNode {
             && let Some(old) = self.paragraph
         {
             let mut measurer = scope.text_measurer();
-            self.paragraph = measurer.restyle(old, &self.style);
+            let layout_style = placeholder_style(&self.style);
+            self.paragraph = measurer.restyle(old, layout_style.as_ref().unwrap_or(&self.style));
             if self.paragraph.is_none() {
                 measurer.release(old);
                 self.constraints = None;
@@ -1066,7 +1218,12 @@ impl LayoutModifierNode for TextNode {
         self.constraints = Some(constraints);
         let paragraph = self.paragraph.expect("laid out");
         let metrics = scope.text_measurer().metrics(paragraph);
+        let paragraph_height = scope.text_measurer().paragraph(paragraph).height();
         let natural = metrics.size;
+        self.sync_custom_shaders(
+            compose_ui::Size::new(natural.width as f32, paragraph_height),
+            relaid,
+        );
         let min_height = self.min_lines_height(scope, density);
         // The result's constraints and size, as Compose's (D2054); the node's size in its own.
         let reported = final_constraints(constraints, self.min_lines, min_height);
@@ -1233,6 +1390,76 @@ impl TextNode {
 
 impl DrawModifierNode for TextNode {
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
+        // Resolve any custom shader brushes during draw (`Observation::Draw`), updating the laid
+        // out paragraph(s) only when resolved shaders change.
+        let resolved = self.custom_shaders.as_mut().map(|custom| custom.derived.get());
+        let style_override = resolved.as_ref().and_then(|r| r.style.clone());
+        let resolved_changed = matches!(
+            (&self.custom_shaders, &resolved),
+            (Some(custom), Some(resolved)) if custom.drawn.as_ref() != Some(resolved)
+        );
+        if let (Some(custom), Some(resolved)) = (&mut self.custom_shaders, resolved)
+            && resolved_changed
+        {
+            custom.drawn = Some(resolved.clone());
+            if let Some(paragraphs) = &mut self.paragraphs {
+                if !resolved.spans.is_empty()
+                    && let Some(layout) = &mut paragraphs.layout
+                {
+                    let resolved_text = apply_resolved_spans(&self.text, &resolved.spans);
+                    let resolved_style = style_override.as_ref().unwrap_or(&self.style);
+                    let base = TextStyle::resolve_defaults(resolved_style, layout.from.direction);
+                    let intrinsics = Rc::new(compose_ui::MultiParagraphIntrinsics::new(
+                        resolved_text,
+                        &base,
+                        &[],
+                        layout.from.density,
+                        layout.from.resolver.clone(),
+                        self.options.soft_wrap,
+                        layout.from.locales.clone(),
+                    ));
+                    layout.multi_paragraph = Rc::new(lay_out_paragraphs(
+                        &intrinsics,
+                        self.options,
+                        layout.constraints,
+                        Some(resolved_style),
+                    ));
+                }
+            } else if let Some(old) = self.paragraph {
+                let resolved_style = style_override.as_ref().unwrap_or(&self.style);
+                let measurer_rc = scope.tree_text_measurer();
+                let mut measurer = measurer_rc.borrow_mut();
+                let next = if resolved.spans.is_empty() {
+                    measurer.restyle(old, resolved_style)
+                } else {
+                    None
+                };
+                if let Some(next) = next {
+                    if next != old {
+                        measurer.release(old);
+                    }
+                    self.paragraph = Some(next);
+                } else {
+                    let resolved_text = if resolved.spans.is_empty() {
+                        None
+                    } else {
+                        Some(apply_resolved_spans(&self.text, &resolved.spans))
+                    };
+                    let next = measurer.layout_annotated(
+                        resolved_text.as_ref().unwrap_or(&self.text),
+                        resolved_style,
+                        TextLayoutOptions { direction: self.direction, ..self.options },
+                        self.constraints.unwrap_or_else(Constraints::unbounded),
+                        &self.density.unwrap_or(compose_ui::Density::new(1.0)),
+                    );
+                    measurer.release(old);
+                    self.paragraph = Some(next);
+                    if let Some(range) = &self.selection {
+                        self.selection_rects = measurer.selection_rects(next, range.clone());
+                    }
+                }
+            }
+        }
         // One platform paragraph, or a text's paragraphs (D2053).
         let multi_paragraph = match &self.paragraphs {
             Some(paragraphs) => match &paragraphs.layout {
@@ -1254,9 +1481,10 @@ impl DrawModifierNode for TextNode {
         for rect in &self.selection_rects {
             scope.draw_rect(*rect, compose_ui::Paint::fill(self.selection_color));
         }
+        let draw_style = style_override.as_ref().unwrap_or(&self.style);
         match (multi_paragraph, paragraph) {
             // In its style's paint, as Compose's node paints its `MultiParagraph`.
-            (Some(multi_paragraph), _) => scope.draw_multi_paragraph(multi_paragraph, &self.style),
+            (Some(multi_paragraph), _) => scope.draw_multi_paragraph(multi_paragraph, draw_style),
             (None, Some(paragraph)) => scope.draw_paragraph(paragraph, Offset::ZERO),
             (None, None) => {}
         }

@@ -108,6 +108,7 @@ fn the_alignment_and_alpha_are_applied() {
             ContentScale::None,
             0.5,
             None,
+            compose_ui::FilterQuality::Low,
         );
     });
     assert_eq!(drawn(&mut ui), Rect::new(80.0, 30.0, 100.0, 50.0));

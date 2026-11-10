@@ -1,9 +1,9 @@
 //! Colors of other spaces than sRGB, drawn by Skia: converted, not read as sRGB values.
 
 use compose::ui::{
-    Color, Offset, Paint, Rect, TileMode,
+    Color, Offset, Paint, Rect, Shader, TileMode,
     colorspace::ColorSpaces,
-    platform::{DisplayList, DrawOp, FixedTextMeasurer, Gradient, Renderer, Shader},
+    platform::{DisplayList, DrawOp, FixedTextMeasurer, Gradient, PaintShader, Renderer},
 };
 use compose_skia::RasterRenderer;
 
@@ -47,10 +47,13 @@ fn a_gradient_of_another_space_draws_its_colors_converted() {
     let gradient =
         Gradient { colors: vec![start, end].into(), stops: None, tile_mode: TileMode::Clamp };
     let mut list = DisplayList::default();
-    let shader = list.push_shader(Shader::LinearGradient {
-        from: Offset::new(2.0, 0.0),
-        to: Offset::new(8.0, 0.0),
-        gradient,
+    let shader = list.push_shader(PaintShader {
+        shader: Shader::LinearGradient {
+            from: Offset::new(2.0, 0.0),
+            to: Offset::new(8.0, 0.0),
+            gradient,
+        },
+        transform: None,
         alpha: 1.0,
     });
     list.push(DrawOp::DrawRect(
