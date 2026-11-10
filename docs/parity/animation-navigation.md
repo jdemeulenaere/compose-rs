@@ -33,9 +33,9 @@ The inventory of Compose's animation and navigation tests and public API against
 | Status | Files | @Test |
 |---|---|---|
 | `covered` | 0 | 0 |
-| `ported` | 82 | 978 |
+| `ported` | 85 | 1,010 |
 | `port` | 0 | 0 |
-| `partial` | 6 | 49 |
+| `partial` | 3 | 17 |
 | `feature:<name>` | 6 | 38 |
 | `n/a` | 14 | 154 |
 
@@ -44,7 +44,7 @@ By module:
 | Module | Files | @Test | covered | ported | port | partial | feature | n/a |
 |---|---|---|---|---|---|---|---|---|
 | animation-core | 30 | 212 | 0 | 28 / 204 | 0 | 2 / 8 | 0 | 0 |
-| animation | 15 | 238 | 0 | 11 / 190 | 0 | 3 / 32 | 1 / 16 | 0 |
+| animation | 15 | 238 | 0 | 14 / 222 | 0 | 0 | 1 / 16 | 0 |
 | animation-graphics | 5 | 22 | 0 | 0 | 0 | 0 | 5 / 22 | 0 |
 | navigation-compose | 9 | 121 | 0 | 0 | 0 | 0 | 0 | 9 / 121 |
 | navigation3-runtime | 21 | 307 | 0 | 20 / 300 | 0 | 0 | 0 | 1 / 7 |
@@ -60,7 +60,7 @@ By module:
 
 Four parts:
 
-- **Animation** (50 files, 472 tests): 39 files `ported` (394 tests), 5 `partial` (40), 6 waiting on features (38), of which what's left is `LookaheadAnimationVisualDebugging` (lookahead-visual-debug, 16) and the animated image vector (animated-image-vector, 22; the full `ImageVector` it needed exists since D1902). The 5 `partial` files' other gaps are `n/a` ones and lookahead in `AnimatedContent`, `animate_content_size` and `CapturedAnimatedVisibility` (6 tests, unblocked).
+- **Animation** (50 files, 472 tests): 42 files `ported` (426 tests), 2 `partial` (8), 6 waiting on features (38), of which what's left is `LookaheadAnimationVisualDebugging` (lookahead-visual-debug, 16) and the animated image vector (animated-image-vector, 22; the full `ImageVector` it needed exists since D1902). The 2 `partial` files' remaining gaps are `n/a` ones in `animation-core`.
 - **Navigation 3** (36 files, 428 tests): 35 files `ported` (421 tests), 1 `n/a` (7). Complete: every portable file and `@Test` method is ported (D704, D1400–D1415, D2170, D2171).
 - **Navigation events and back** (13 files, 198 tests), what Navigation 3's back is built on: 8 files `ported` (163 tests), 1 `partial` (9), 4 `n/a` (26), in `compose-navigation-event` (D845).
 - **Navigation Compose** (9 files, 121 tests): all `n/a: replaced by Navigation 3 (D704)`. Their notes say which Navigation 3 tests check the same behaviour.
@@ -110,10 +110,10 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 29 | `compose/animation/animation-core/src/androidHostTest/kotlin/androidx/compose/animation/core/EasingTest.android.kt` | 2 | cubic solver near 0/1 and with overshooting curves | ported | `easing.rs` |
 | 30 | `compose/animation/animation-core/src/androidHostTest/kotlin/androidx/compose/animation/core/SpringEstimationTest.kt` | 1 | spring duration estimation against simulation over a grid of mass/stiffness | ported | `spring_estimation.rs`: every fifth mass and spring constant of Compose's grid (2.9 million of its 70 million cases) |
 | 31 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimateBoundsTest.kt` | 8 | `Modifier.animateBounds`: position, size, bounds, movable content, lazy layouts, scrolling | ported | `animate_bounds.rs`, all 8 (D1328) |
-| 32 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedContentTest.kt` | 17 | `AnimatedContent`: SizeTransform, alignment, slideInto/OutOfContainer, contentKey, subcomposition, interruption, KeepUntilTransitionsFinished, lookahead, cleanup | partial | 12 ported (`animated_content.rs`: the size transform frame by frame, to and from an empty content, the alignment, an exit finished then interrupted, a transition recreated; `animated_content_scope.rs`: slides into and out of the container, `contentKey` (2), `KeepUntilTransitionsFinished` (2), the enter and exit an interruption picks, the last with a wait one frame later (D817); `compose-material3/tests/suite/animated_content.rs`: a scaffold with tabs); lookahead and `animateBounds` (3: `AnimatedContentLookaheadTest`, `testSizeTransformAlwaysContinuous`, `testTargetChangeLookaheadPlacement`; audit: ui lookahead (D1221–D1226) and `animateBounds` (D1328) exist, but `AnimatedContent` doesn't take the lookahead size and placement yet (it's in `AnimatedVisibility` only, D1320, D1327), so these need that first, and nothing blocks it); n/a: `AnimatedContentWithInterruption` (the test ends as it sets the flag, so its layout-callback assertions never see the interruption, under which Compose's content slides too) and `testAnimatedContentCleanup` (an internal map's size) |
+| 32 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedContentTest.kt` | 17 | `AnimatedContent`: SizeTransform, alignment, slideInto/OutOfContainer, contentKey, subcomposition, interruption, KeepUntilTransitionsFinished, lookahead, cleanup | ported | all 15 portable of 17 ported (`animated_content.rs`: the size transform frame by frame, to and from an empty content, the alignment, an exit finished then interrupted, a transition recreated, in a `LookaheadScope` the container ahead is its target content's size with the target at its origin (`AnimatedContentLookaheadTest`, D2350, D2353), under `animate_bounds` it grows without going back (`testSizeTransformAlwaysContinuous`), the target content at the origin ahead whichever it is (`testTargetChangeLookaheadPlacement`); `animated_content_scope.rs`: slides into and out of the container, `contentKey` (2), `KeepUntilTransitionsFinished` (2), the enter and exit an interruption picks, the last with a wait one frame later (D817); `compose-material3/tests/suite/animated_content.rs`: a scaffold with tabs); n/a: `AnimatedContentWithInterruption` (the test ends as it sets the flag, so its layout-callback assertions never see the interruption, under which Compose's content slides too) and `testAnimatedContentCleanup` (an internal map's size) |
 | 33 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedVisibilityTest.kt` | 17 | `AnimatedVisibility`: expand/shrink, slide, fade, scale with exact values, None, Transition overload, seeking, lookahead, veil, settle time | ported | all 17 (`animated_visibility.rs`: expand and shrink, slide, a content size change, fade, scale, the scale spring's threshold, `None`/`None`, the `Transition` overload, an interrupted exit, the settle time, `testAnimatedVisibilityInLookaheadScope` (sized ahead where it ends, D1320, with each frame of the exit; and in a scope, an expansion going to its content's size ahead, D1327), with a test of the column and row defaults; `veil.rs`: the five veil tests; `seekable.rs`: seeking, through a `SeekableTransitionState` for the internal `setPlaytimeAfterInitialAndTargetStateEstablished`) |
-| 34 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimationModifierTest.kt` | 6 | `animateContentSize`: frame-by-frame size, alignment LTR/RTL, lookahead, inspector, re-attach | partial | 3 ported (`content_size.rs`: the frame-by-frame size with its finished listener, alignment left to right and right to left); `properFinalStateAfterReAttach` and `testAnimatedContentSizeInLookahead` not ported (audit: movable content (D1305, D1308, D1511) and ui lookahead (D1221–D1226) now exist; `animate_content_size` doesn't take the lookahead size yet (`content_size.rs` has none), and nothing blocks either); inspector n/a |
-| 35 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CapturedAnimatedVisibilityTest.kt` | 9 | `CapturedAnimatedVisibility`: content disposed at once, exit animates a captured layer, MutableTransitionState, interruptions, lookahead | partial | 7 of 9, `captured_visibility.rs`, its pixels read from the display list (D1413); `inLookaheadScope` and `siblingLookaheadInColumn` not ported (audit: ui lookahead exists, D1221–D1226, but `CapturedAnimatedVisibility` takes no lookahead size or placement yet (`captured.rs`); nothing blocks it) |
+| 34 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimationModifierTest.kt` | 6 | `animateContentSize`: frame-by-frame size, alignment LTR/RTL, lookahead, inspector, re-attach | ported | all 5 portable of 6 ported (`content_size.rs`: the frame-by-frame size with its finished listener, alignment left to right and right to left, in a `LookaheadScope` its size ahead is its content's at once (`testAnimatedContentSizeInLookahead`, D2351), moved by movable content half-way through it still ends at its content's size (`properFinalStateAfterReAttach`)); inspector n/a |
+| 35 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CapturedAnimatedVisibilityTest.kt` | 9 | `CapturedAnimatedVisibility`: content disposed at once, exit animates a captured layer, MutableTransitionState, interruptions, lookahead | ported | all 9, `captured_visibility.rs`, its pixels read from the display list (D1413); in a `LookaheadScope` no size ahead once exiting and a sibling below placed ahead where it ends (`inLookaheadScope`, `siblingLookaheadInColumn`, D2352) |
 | 36 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CrossfadeTest.kt` | 6 | `Crossfade`: shows content, disposes old content, custom spec, null state, rememberSaveable per screen, contentKey | ported | `crossfade_ported.rs` (`crossfadeTest_contentKey` with a wait one frame later, D817) |
 | 37 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/DeferredAnimatedContentTest.kt` | 29 | `DeferredAnimatedContent`: gates, preview transforms, hand-off velocity, interruption specs, veil | ported | `deferred_content.rs` (`immediateExitTest` and `verifyExitAnimationAfterGateOpens` in one; the veil's pixel from the display list; D828; widths through `on_globally_positioned`, as Compose's, since D1187) |
 | 38 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/DeferredAnimatedVisibilityTest.kt` | 21 | `DeferredAnimatedVisibility`: enter/exit gates, preview scale/offset, hand-off, interruption | ported | `deferred_visibility.rs` (D828; widths through `on_globally_positioned`, as Compose's, since D1187) |
@@ -571,14 +571,14 @@ One entry per feature. Sizes:
 - **Tests:** `AnimationModifierTest` (2 alignment).
 - **Dependencies:** none.
 
-#### captured-animated-visibility (M, not exp., new at this tip): done but what's of lookahead (D1413)
+#### captured-animated-visibility (M, not exp., new at this tip): done (D1413, D2352)
 
 - **API:** `CapturedAnimatedVisibility(visible | MutableTransitionState, …)`.
-- **What it does:** disposes the content at once and animates a recorded layer of its last frame.
-- **Tests:** `CapturedAnimatedVisibilityTest`.
+- **What it does:** disposes the content at once and animates a recorded layer of its last frame; in a `LookaheadScope`, takes no size ahead once exiting and keeps lookahead and approach sizes apart.
+- **Tests:** `CapturedAnimatedVisibilityTest` (all 9 ported).
 - **Dependencies:**
   - recording a subtree and drawing it later: `DrawCapture`, the part of `GraphicsLayer` it needs, the object itself being ui-core's graphics-layer-object;
-  - enter-exit-params and transition-state; ui lookahead for 2 tests.
+  - enter-exit-params and transition-state; ui lookahead (built).
 
 #### shared-transition (XL, not exp.): done (D1329, D1340, D2171)
 
@@ -606,11 +606,11 @@ One entry per feature. Sizes:
 - **Tests:** `LookaheadAnimationVisualDebugHelperTest`.
 - **Dependencies:** shared-transition, animate-bounds: both built (D1329–D1341, D1328; audit 2026-11-08), so nothing blocks it.
 
-#### lookahead in animations (S–M after ui lookahead; no separate API)
+#### lookahead in animations (S–M after ui lookahead; no separate API): done (D1320, D1327, D2350–D2353)
 
-- **What it does:** `AnimatedVisibility`, `AnimatedContent` and `animate_content_size` take the lookahead size and placement inside a `LookaheadScope`.
-- **Tests:** `AnimatedVisibilityTest` (1, ported), `AnimatedContentTest` (3), `AnimationModifierTest` (1), `CapturedAnimatedVisibilityTest` (2).
-- **Dependencies:** ui lookahead: built (D1221–D1226). Done for `AnimatedVisibility` (D1320, D1327); not for `AnimatedContent` (3 tests), `animate_content_size` (1) and `CapturedAnimatedVisibility` (2), and nothing blocks them (audit 2026-11-08).
+- **What it does:** `AnimatedVisibility`, `AnimatedContent`, `animate_content_size` and `CapturedAnimatedVisibility` take the lookahead size and placement inside a `LookaheadScope`.
+- **Tests:** `AnimatedVisibilityTest` (1), `AnimatedContentTest` (3), `AnimationModifierTest` (2), `CapturedAnimatedVisibilityTest` (2) — all ported.
+- **Dependencies:** ui lookahead (built, D1221–D1226).
 
 #### animated-image-vector (L, not exp.)
 
