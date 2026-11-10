@@ -1127,8 +1127,8 @@ The log is split by area into the files below, one table each, rows in number or
 | D2062 | [text](decisions/text.md#d2062) | revised by D2071 |
 | D2070 | [text](decisions/text.md#d2070) | current |
 | D2071 | [text](decisions/text.md#d2071) | current |
-| D2072 | [text](decisions/text.md#d2072) | revised by D2107 |
-| D2073 | [text](decisions/text.md#d2073) | revised by D2105 |
+| D2072 | [text](decisions/text.md#d2072) | revised by [D2107](decisions/text.md#d2107) |
+| D2073 | [text](decisions/text.md#d2073) | revised by [D2105](decisions/text.md#d2105) |
 | D2074 | [text](decisions/text.md#d2074) | current |
 | D2075 | [api-and-tooling](decisions/api-and-tooling.md#d2075) | revised by [D2130](decisions/api-and-tooling.md#d2130) |
 | D2076 | [api-and-tooling](decisions/api-and-tooling.md#d2076) | revised by [D2131](decisions/api-and-tooling.md#d2131) |
