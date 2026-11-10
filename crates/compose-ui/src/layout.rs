@@ -608,6 +608,7 @@ impl<'a> MeasureScope<'a> {
                 "compose-ui: a measure policy measured the same child twice in one measurement"
             );
             child.measured_in = self.run;
+            child.measured_by_parent = true;
             tree.measure_node(measurable.node, constraints)
         } else {
             assert_eq!(

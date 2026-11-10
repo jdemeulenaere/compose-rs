@@ -1748,8 +1748,6 @@ fn a_position_in_the_same_coordinates_is_itself() {
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/node/LayoutNodeTest.kt, testChildToLocalFailedWhenNotAncestorNoParent
 #[test]
 #[should_panic]
-#[ignore = "coordinates of another tree are a source compose-rs doesn't find: `local_position_of` \
-            answers zero, as for detached ones, where Compose throws (not in the same hierarchy)"]
 fn a_position_from_another_tree_panics() {
     let (_, first, _first_host) = parent_and_child((0, 0), (0, 0));
     let (_, second, _second_host) = parent_and_child((0, 0), (0, 0));

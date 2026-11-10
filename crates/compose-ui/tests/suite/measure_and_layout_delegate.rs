@@ -998,7 +998,6 @@ fn a_node_asked_to_measure_again_after_it_was_measured_in_the_frame_is_measured_
 /// measured or placed): Compose's `requestRemeasure` while `Measuring` and `requestRelayout` while
 /// `Measuring` or `LayingOut` are swallowed, what runs seeing what asked.
 #[test]
-#[ignore = "review: a node's request for itself while it's measured or placed is queued and run after, measuring or placing it a second time in the frame, where Compose swallows it"]
 fn a_node_asking_for_itself_while_it_s_measured_or_placed_is_measured_or_placed_once() {
     let root = node(|it| it.add(leaf()));
     let mut host = delegate(&root);
@@ -1029,7 +1028,6 @@ fn a_node_asking_for_itself_while_it_s_measured_or_placed_is_measured_or_placed_
 /// work (Compose's `hasPendingMeasureOrLayout` false, and its request returns
 /// `!duringFullMeasureLayoutPass`, so it asks the owner for no other layout).
 #[test]
-#[ignore = "review: a node's request made during a frame's layout and done in it still leaves has_pending_work (frame_requested set by the request), an empty frame more where Compose asks for none"]
 fn a_request_made_and_done_in_a_frame_leaves_no_work() {
     let root = node(|it| it.add(node(|it| it.add(leaf()))));
     let mut host = delegate(&root);
@@ -1063,7 +1061,6 @@ fn a_request_made_and_done_in_a_frame_leaves_no_work() {
 /// child is still `measurePending` from its creation, so `requestRemeasure` returns at once and
 /// its parent isn't asked either.
 #[test]
-#[ignore = "review: a never-measured child's remeasure request measures its parent (remeasure_children_in_place, constraints None), where Compose's asks nothing (ui-core.md, differences, 14)"]
 fn a_child_its_parent_never_measured_asked_to_measure_again_measures_nothing() {
     let child = node(|it| it.size.set(Some(40)));
     let root = node(|it| {
@@ -1086,7 +1083,6 @@ fn a_child_its_parent_never_measured_asked_to_measure_again_measures_nothing() {
 /// `measuredByParent` is `NotUsed`, so `requestRemeasure` only marks it `measurePending`
 /// (`canAffectPlacedParent` false), and its parent's next measurement measures it.
 #[test]
-#[ignore = "review: a child its parent stopped measuring is measured at once when asked, and its new size measures its parent, where Compose's waits for its parent (ui-core.md, differences, 14)"]
 fn a_child_its_parent_stopped_measuring_asked_to_measure_again_waits_for_its_parent() {
     let child = node(|it| it.size.set(Some(40)));
     let root = node(|it| {

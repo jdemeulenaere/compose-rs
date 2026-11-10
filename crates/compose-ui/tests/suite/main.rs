@@ -73,6 +73,7 @@ mod review_d_panic_poisoned;
 #[path = "../review_d_support/mod.rs"]
 mod review_d_support;
 mod review_groups;
+mod review_layout_scheduler;
 mod review_lookahead;
 mod review_moved_node_attach;
 mod review_pointer_cancel;
@@ -82,6 +83,7 @@ mod review_shared_elements_2;
 mod review_shared_elements_3;
 mod review_text_style;
 mod review_w2_graphics;
+mod review_w2_layout_scheduler;
 mod review_w2_pointer;
 mod root_node_layout;
 mod rulers;

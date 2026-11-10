@@ -315,9 +315,7 @@ impl NodeContext<'_> {
         // layout node measuring, inside a measurement): where the tree applies its nodes'
         // requests, with every node in its chain, as a handle's.
         if what == Invalidation::ParentData && self.index.is_some() {
-            let requests = &self.tree.focus_requests;
-            requests.node_invalidations.borrow_mut().push((self.node, self.entry, what));
-            requests.wake();
+            self.tree.focus_requests.push_invalidation(self.node, self.entry, what);
             return;
         }
         let (node, index) = (self.node, self.index);
@@ -655,8 +653,8 @@ impl NodeHandle {
             // Detached: nothing, for every invalidation (some of Compose's fail, D1178).
             return;
         }
-        requests.node_invalidations.borrow_mut().push((self.node, self.entry, what));
-        requests.wake();
+        // The layout running applies it (D2382, D2447).
+        requests.push_invalidation(self.node, self.entry, what);
     }
 
     /// Runs `block`, observing the state it reads, as `observeReads` from where a node has no

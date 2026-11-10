@@ -158,9 +158,19 @@ pub struct LayoutNode {
     pub(crate) needs_measure: bool,
     /// Some descendant needs measuring.
     pub(crate) subtree_needs_measure: bool,
-    /// Whether the parent placed it in its last measurement or placement block: unplaced nodes
-    /// aren't drawn.
+    /// Whether it's placed, as Compose's `LayoutNode.isPlaced`: its parent placed it
+    /// (`placed_by_parent`) and each of its layout modifiers placed what's inside it
+    /// (`unplaced_layers` empty, D2383). Unplaced nodes aren't drawn, hit or focused.
     pub(crate) placed: bool,
+    /// Whether the parent placed it in its last measurement or placement block, as Compose's
+    /// `isPlacedByParent`: what measuring and placing follow (its blocks run, it can't be placed
+    /// twice), placed or not inside.
+    pub(crate) placed_by_parent: bool,
+    /// The layers (the first `MOTION_LAYERS`, by bit) whose layout modifier didn't place what's
+    /// inside it in its last measurement or placement block: the node isn't placed while one is,
+    /// nor drawn or hit, as Compose's inner coordinator not placed leaves its `LayoutNode`
+    /// unplaced (D2383). Most nodes have none.
+    pub(crate) unplaced_layers: u32,
     /// The placement blocks of its layers (`MeasureScope::layout_with`): most nodes have none.
     pub(crate) placements: Option<Box<crate::placement::NodePlacements>>,
     /// In a `LookaheadScope`, or under one: the results of the pass not running (D1221).
@@ -179,6 +189,10 @@ pub struct LayoutNode {
     /// Its parent measured it in a placement block, as `measuredByParent == InLayoutBlock`: a new
     /// size places the parent again, doesn't measure it.
     pub(crate) measured_in_block: bool,
+    /// Its parent's last measurement, or the placement block run since, measured it, as Compose's
+    /// `measuredByParent != NotUsed`: only then (or placed) can a new size of it change its
+    /// parent, so only then does a request of it measure it in place (`remeasure_children_in_place`).
+    pub(crate) measured_by_parent: bool,
     /// Where it is in `UiTree::coordinate_readers`, or `u32::MAX`.
     pub(crate) reader_at: u32,
     /// Which layers a motion frame of reference placed
@@ -273,6 +287,8 @@ impl LayoutNode {
             needs_measure: true,
             subtree_needs_measure: false,
             placed: false,
+            placed_by_parent: false,
+            unplaced_layers: 0,
             placements: None,
             lookahead: None,
             measuring: false,
@@ -283,6 +299,7 @@ impl LayoutNode {
             motion_layers: 0,
             subtree_needs_placement: false,
             measured_in_block: false,
+            measured_by_parent: false,
             layer_moved: false,
             measured_in: 0,
             intrinsics_asked: false,
@@ -578,6 +595,8 @@ pub struct UiTree {
     /// Pointer nodes came, went or changed: the resting mouse's hover is refreshed even if
     /// nothing was laid out.
     pub(crate) hover_stale: bool,
+    /// `draw_ahead` is recording a premeasured repaint boundary not yet placed by its parent.
+    pub(crate) drawing_ahead: bool,
     /// The lifecycle steps of nodes a paused composition's resumes reused, held until it's
     /// applied or discarded (`Applier::on_paused_end`, D1162).
     pub(crate) paused_lifecycle: Vec<crate::lifecycle::Lifecycle>,
@@ -669,6 +688,7 @@ impl UiTree {
         let mut root = LayoutNode::new(Rc::new(StackMeasurePolicy));
         root.density = density;
         root.placed = true;
+        root.placed_by_parent = true;
         root.attached = true;
         UiTree {
             ignoring_remeasure: None,
@@ -759,6 +779,7 @@ impl UiTree {
             autofill: None,
             autofill_available: false,
             hover_stale: false,
+            drawing_ahead: false,
             paused_lifecycle: Vec::new(),
             side_effects: Vec::new(),
             remeasure_allowed: false,
@@ -2017,7 +2038,8 @@ impl UiTree {
         let value = self.node_mut(node);
         value.semantics_id = semantics_id;
         value.composite_key = compose_runtime::CompositeKeyToken::NONE;
-        if std::mem::take(&mut value.deactivated) {
+        let reactivated = std::mem::take(&mut value.deactivated);
+        if reactivated {
             // Its parent has a child to measure again (an ordinary layout's, or a list's): it
             // measures it again if it asked to while deactivated (`needs_measure` kept), as
             // Compose's `rescheduleRemeasureOrRelayout`; its ancestors, reused before it, are
@@ -2030,7 +2052,7 @@ impl UiTree {
             // slot, the item it wants not composed then). Its parent places the new content
             // (D1264). Not a paused composition's: applied later, its content waits for the frame
             // wanting it; a prefetch composing whole (no pausable composition) asks here too.
-            if !value.placed
+            if !value.placed_by_parent
                 && !paused
                 && let Some(parent) = self.parent_of(node)
             {
@@ -2048,6 +2070,10 @@ impl UiTree {
             self.queue_lifecycle(crate::lifecycle::Lifecycle::Reset(node));
             self.paused_lifecycle.push(crate::lifecycle::Lifecycle::AttachEntries(node));
             self.node_mut(node).reattach_pending = true;
+        } else if reactivated {
+            // From the kept pool (reset and detached then): attached before the update, as
+            // Compose's `onReuse` (D2392).
+            self.attach_reused(node);
         } else {
             self.queue_lifecycle(crate::lifecycle::Lifecycle::Reuse(node));
         }
@@ -2253,10 +2279,14 @@ impl Applier for UiTree {
             let Some(value) = self.get_mut(child.node) else { continue };
             value.parent = None;
             value.virtual_parent = None;
-            value.placed = false;
+            value.placed_by_parent = false;
+            let (was_placed, attached) = (value.placed, value.attached);
+            if was_placed {
+                self.mark_subtree_not_placed(child.node);
+            }
             if from_removed {
                 // Detached with the parent it left, or before where it went attaches it.
-                value.detach_pending = true;
+                self.node_mut(child.node).detach_pending = true;
                 self.queue_lifecycle(crate::lifecycle::Lifecycle::Detach(child.node));
                 self.removed_parents.push((child.node, parent));
                 self.taken_out.push((child.node, parent));
@@ -2264,7 +2294,7 @@ impl Applier for UiTree {
             }
             // Out of the tree, its subtree too: their modifier nodes are detached when the pass
             // ends (or when it releases them, first), as Compose's `LayoutNode.detach`.
-            if value.attached {
+            if attached {
                 let mut stack = vec![child.node];
                 while let Some(next) = stack.pop() {
                     let value = self.node_mut(next);
@@ -2354,8 +2384,9 @@ impl Applier for UiTree {
         }
         self.focus_subtree_deactivating(node);
         let Some(value) = self.get_mut(node) else { return };
-        value.placed = false;
+        value.placed_by_parent = false;
         value.subtree_needs_measure = false;
+        self.mark_subtree_not_placed(node);
         self.tell_unplaced_going(node);
         let Some(value) = self.get_mut(node) else { return };
         // The outermost deactivated node: its parent lays out and draws without it.
@@ -2365,6 +2396,7 @@ impl Applier for UiTree {
             self.invalidate_measure(parent);
         }
         self.reset_modifier_state(node);
+        self.reset_layout_state(node);
         // At the end of the pass already: reset and detached now, the node deactivated first so
         // what the callbacks invalidate is left to its reuse (a reset asking for a measurement
         // measures nothing around content leaving).

@@ -946,7 +946,7 @@ impl UiTree {
         self.get(node)?;
         let own = self.own_semantics(node)?;
         let (layer, entry) = (own.layer, own.bounds_entry);
-        if !self.is_placed_in_root(node) {
+        if !self.is_layer_placed(node, layer) {
             return None;
         }
         let coordinates = self.coordinate_values(node, layer, entry);
@@ -1186,7 +1186,7 @@ impl UiTree {
         let mut current = Some(node);
         while let Some(id) = current {
             let value = self.node(id);
-            if !value.placed && value.parent.is_some() && !value.overlay {
+            if !value.placed && value.parent.is_some() {
                 return false;
             }
             current = if value.overlay { None } else { value.parent };

@@ -429,11 +429,144 @@ impl UiTree {
     fn note_needs_placement(&mut self, node: NodeId) {
         let value = self.node_mut(node);
         value.needs_placement = true;
-        if value.placed && !value.deactivated {
+        if value.placed_by_parent && !value.deactivated {
             let parent = value.parent;
             self.note_placement_below(parent);
             self.needs_draw = true;
         }
+    }
+
+    /// Layer `layer` of `node` (a layout modifier's) placed what's inside it, or didn't, in the
+    /// measurement or block that just ran: the node is placed only while each of its layers
+    /// placed what's inside it, as Compose's `LayoutNode.isPlaced` follows its inner coordinator
+    /// (D2383). A bit compared, for most.
+    #[inline]
+    pub(crate) fn note_inside_placed(&mut self, node: NodeId, layer: usize, placed: bool) {
+        if layer >= crate::tree::MOTION_LAYERS {
+            return;
+        }
+        let value = self.node(node);
+        let bit = 1u32 << layer;
+        let mask = if placed { value.unplaced_layers & !bit } else { value.unplaced_layers | bit };
+        if mask != value.unplaced_layers {
+            self.unplaced_layers_changed(node, mask);
+        }
+    }
+
+    /// Whether `node`'s parent places where the root shows it (`parent?.isPlaced` in Compose; an
+    /// overlay stands in the root).
+    #[inline]
+    pub(crate) fn parent_is_placed(&self, node: NodeId) -> bool {
+        let value = self.node(node);
+        value.overlay || value.parent.is_none_or(|parent| self.node(parent).placed)
+    }
+
+    /// Whether `layer` of `node` is placed where the root shows it: `node` placed by a placed
+    /// parent and every layout modifier outside `layer` placing its content (D2383).
+    #[inline]
+    pub(crate) fn is_layer_placed(&self, node: NodeId, layer: usize) -> bool {
+        let value = self.node(node);
+        if value.placed {
+            return true;
+        }
+        if value.deactivated || (!value.placed_by_parent && value.parent.is_some()) {
+            return false;
+        }
+        if !self.parent_is_placed(node) {
+            return false;
+        }
+        let mask = if layer >= crate::tree::MOTION_LAYERS { u32::MAX } else { (1u32 << layer) - 1 };
+        (value.unplaced_layers & mask) == 0
+    }
+
+    /// `node` and its placed-by-parent, un-deactivated descendants with placed layers become
+    /// placed, once `node`'s parent is placed (D2383).
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn mark_subtree_placed(&mut self, node: NodeId) {
+        if !self.parent_is_placed(node) {
+            return;
+        }
+        self.mark_subtree_placed_under_placed_parent(node);
+    }
+
+    fn mark_subtree_placed_under_placed_parent(&mut self, node: NodeId) {
+        let value = self.node_mut(node);
+        if value.placed
+            || !value.placed_by_parent
+            || value.deactivated
+            || value.unplaced_layers != 0
+        {
+            return;
+        }
+        value.placed = true;
+        let told = value.kinds.any(crate::node_chain::NodeKinds::ON_PLACED);
+        let waiting = value.needs_placement || value.subtree_needs_placement;
+        if told && !self.in_lookahead {
+            self.placed_layers.push((node, 0));
+        }
+        if waiting {
+            self.placed_with_blocks_waiting(node);
+        }
+        for index in 0..self.node(node).children.len() {
+            let child = self.node(node).children[index].node;
+            self.mark_subtree_placed_under_placed_parent(child);
+        }
+    }
+
+    /// `node` and its descendants become unplaced, keeping their `placed_by_parent` and
+    /// `unplaced_layers` so placing `node` again restores them (D2383).
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn mark_subtree_not_placed(&mut self, node: NodeId) {
+        let value = self.node_mut(node);
+        if !value.placed {
+            return;
+        }
+        value.placed = false;
+        for index in 0..self.node(node).children.len() {
+            let child = self.node(node).children[index].node;
+            self.mark_subtree_not_placed(child);
+        }
+    }
+
+    /// `node`'s layers placing what's inside them changed: placed by its parent, it's shown or
+    /// hidden now, its subtree with it. What draws it draws again; the hover, the semantics and
+    /// the unplaced-aware nodes (`notify_unplaced`, after the layout) follow.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn unplaced_layers_changed(&mut self, node: NodeId, mask: u32) {
+        let parent_placed = self.parent_is_placed(node);
+        let value = self.node_mut(node);
+        value.unplaced_layers = mask;
+        let placed = parent_placed && value.placed_by_parent && !value.deactivated && mask == 0;
+        if placed == value.placed {
+            return;
+        }
+        if placed {
+            self.mark_subtree_placed(node);
+            let value = self.node(node);
+            if value.needs_placement || value.subtree_needs_placement {
+                let parent = value.parent;
+                self.note_placement_below(parent);
+            }
+        } else {
+            self.mark_subtree_not_placed(node);
+        }
+        let value = self.node(node);
+        let (parent, overlay) = (value.parent, value.overlay);
+        // What's ahead isn't shown.
+        if self.in_lookahead {
+            return;
+        }
+        self.invalidate_draw_of(node);
+        match parent {
+            Some(parent) if !overlay => self.invalidate_children_draw_of(parent),
+            _ => self.needs_draw = true,
+        }
+        self.hover_stale = true;
+        self.laid_out_since_callbacks = true;
+        self.mark_semantics_changed();
     }
 
     /// `node` and its ancestors have something below them for the placement pass.
@@ -461,15 +594,17 @@ impl UiTree {
             // What measuring its own content asked of it is done too.
             self.node_mut(node).needs_placement = false;
         }
-        // Cleared after: what the children's blocks place climbs no higher than this.
-        if self.node(node).subtree_needs_placement {
+        // Cleared after: what the children's blocks place climbs no higher than this. Left
+        // untouched while `!placed` (a modifier didn't place its content), so children run once
+        // it's placed again.
+        if self.node(node).placed && self.node(node).subtree_needs_placement {
             for index in 0..self.node(node).children.len() {
                 let Some(child) = self.node(node).children.get(index).map(|child| child.node)
                 else {
                     break;
                 };
                 let value = self.node(child);
-                if value.placed
+                if value.placed_by_parent
                     && !value.deactivated
                     && (value.needs_placement || value.subtree_needs_placement)
                 {
@@ -517,6 +652,19 @@ impl UiTree {
         if !self.new_layers.is_empty() {
             self.run_new_layers();
         }
+        // What its handles ask of its placement while its blocks run is what they do (D2381, D2447).
+        let mark = if self.focus_requests.has_node_requests.get() {
+            self.mark_own_requests()
+        } else {
+            (0, 0, 0)
+        };
+        self.run_placement_blocks_observed(node);
+        if self.focus_requests.has_node_requests.get() {
+            self.drop_own_requests(node, mark, false);
+        }
+    }
+
+    fn run_placement_blocks_observed(&mut self, node: NodeId) {
         let lines = self.alignment_lines_read;
         // Some ran already to know a line, what they read kept.
         let adding = lines
@@ -536,11 +684,23 @@ impl UiTree {
                 if let Some((block, measure_run, first)) = found {
                     again |= !first;
                     let run = self.run_placement_block(node, layer, measure_run, first, &block);
-                    // What it didn't place inside it isn't placed, its block not run with it.
+                    // What it didn't place inside it isn't placed, its block not run with it,
+                    // and the node isn't placed (D2383).
                     let value = self.node(node);
-                    if layer + 1 < value.layers.len() && value.content_placed_in != run {
-                        break;
+                    if layer + 1 < value.layers.len() {
+                        let placed = value.content_placed_in == run;
+                        self.note_inside_placed(node, layer, placed);
+                        if !placed {
+                            break;
+                        }
                     }
+                } else if layer < crate::tree::MOTION_LAYERS
+                    && layer + 1 < self.node(node).layers.len()
+                    && self.node(node).unplaced_layers & (1u32 << layer) != 0
+                {
+                    // Eagerly unplaced in `measure` or already skipped in `run_block_for_alignment`
+                    // (D2445): inner deferred blocks wait too.
+                    break;
                 }
                 layer += 1;
             }
@@ -697,15 +857,23 @@ impl UiTree {
                     self.forget_reader(index);
                     continue;
                 };
-                if value.placed
-                    && !value.deactivated
-                    && !value.needs_placement
-                    && self.is_placed_in_root(reader.node)
+                let (placed, by_parent, active, parent, overlay) = (
+                    value.placed,
+                    value.placed_by_parent,
+                    !value.deactivated && !value.needs_placement,
+                    value.parent,
+                    value.overlay,
+                );
+                let ancestors_placed =
+                    overlay || parent.is_none_or(|parent| self.is_placed_in_root(parent));
+                if (placed || ((reader.blocks || reader.ahead) && by_parent))
+                    && active
+                    && ancestors_placed
                 {
                     let signature = self.signature_of_reader(reader.node);
                     if signature != reader.signature {
                         self.coordinate_readers[index].signature = signature;
-                        if reader.told {
+                        if reader.told && placed {
                             self.placed_layers.push((reader.node, 0));
                         }
                         if reader.blocks {
@@ -765,12 +933,17 @@ impl UiTree {
             },
         );
         let pass = self.alignment_pass();
+        let mut run_id = 0;
         let mut run = || {
-            pass.tree.run_placement_block(node, layer, measure_run, first, &block);
+            run_id = pass.tree.run_placement_block(node, layer, measure_run, first, &block);
         };
         match &observer {
             Some(observer) => observer.observe_adding(key, run),
             None => run(),
+        }
+        if layer + 1 < pass.tree.node(node).layers.len() {
+            let placed = pass.tree.node(node).content_placed_in == run_id;
+            pass.tree.note_inside_placed(node, layer, placed);
         }
         if pass.tree.asked_while_aligning.get()
             && let Some(entry) = (pass.tree.node_mut(node).placements.as_mut())
@@ -792,22 +965,38 @@ impl UiTree {
         let width = value.layers[layer].measured.width;
         let places_children = layer + 1 == value.layers.len();
         if !first && places_children {
-            // What it doesn't place now isn't placed, as `markSubtreeAsNotPlaced`.
             for index in 0..self.node(node).children.len() {
                 let child = self.node(node).children[index].node;
                 let child = self.node_mut(child);
-                child.placed = false;
+                child.placed_by_parent = false;
+                // What the last run measured is measured by none now (Compose's `clearPlaceOrder`).
+                if child.measured_in_block {
+                    child.measured_by_parent = false;
+                }
                 child.measured_in_block = false;
             }
             self.invalidate_children_draw_of(node);
         }
         let run = self.next_measure_run();
-        let mut scope = MeasureScope::new(&mut *self, node, run);
-        scope.layer = layer;
-        let _open = scope.base.tree.open();
-        let mut placement =
-            PlacementScope { force_lookahead_offset: false, scope, width, measure_run };
-        block(&mut placement);
+        {
+            let mut scope = MeasureScope::new(&mut *self, node, run);
+            scope.layer = layer;
+            let _open = scope.base.tree.open();
+            let mut placement =
+                PlacementScope { force_lookahead_offset: false, scope, width, measure_run };
+            block(&mut placement);
+        }
+        if places_children {
+            // What it didn't place now isn't placed, its subtree with it, as
+            // `markSubtreeAsNotPlaced` (D2383).
+            for index in 0..self.node(node).children.len() {
+                let child = self.node(node).children[index].node;
+                let child_val = self.node(child);
+                if !child_val.placed_by_parent && child_val.placed {
+                    self.mark_subtree_not_placed(child);
+                }
+            }
+        }
         run
     }
 }

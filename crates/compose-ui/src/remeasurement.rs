@@ -42,8 +42,7 @@ impl Remeasurement {
         // Application code: run with the tree free again.
         crate::input::run_actions(callbacks);
         if !ran && let Some(requests) = crate::node_context::requests_of(self.tree) {
-            requests.measure_requests.borrow_mut().push(node);
-            requests.wake();
+            requests.push_measure_request(node);
         }
     }
 }

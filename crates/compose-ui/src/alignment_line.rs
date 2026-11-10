@@ -358,7 +358,7 @@ impl UiTree {
             for node in requests {
                 let Some(value) = self.get(node) else { continue };
                 let (measure, placement, placed) =
-                    (value.needs_measure, value.needs_placement, value.placed);
+                    (value.needs_measure, value.needs_placement, value.placed_by_parent);
                 let parent = value.parent;
                 if measure {
                     let mut above = parent;
@@ -543,8 +543,14 @@ impl UiTree {
                     if inner == AlignmentLine::UNSPECIFIED {
                         return inner;
                     }
-                    // To know where its content is, as `replace`.
+                    // To know where its content is, as `replace`; if it didn't place it, no line
+                    // crosses `layer` (D2445).
                     self.run_block_for_alignment(node, layer);
+                    if layer < crate::tree::MOTION_LAYERS
+                        && self.node(node).unplaced_layers & (1u32 << layer) != 0
+                    {
+                        return AlignmentLine::UNSPECIFIED;
+                    }
                     inner + line.of(self.node(node).layers[layer + 1].offset)
                 }
             }
@@ -601,20 +607,30 @@ impl UiTree {
         for index in 0..self.node(node).children.len() {
             let child = self.node(node).children[index].node;
             let value = self.node(child);
-            if !value.placed || value.deactivated {
+            if !value.placed_by_parent || value.deactivated {
                 continue;
             }
             if lines_of(value).is_none_or(|lines| lines.dirty) {
                 self.layout_children(child);
             }
             let value = self.node(child);
+            let unplaced = value.unplaced_layers;
             let last = value.layers.len() - 1;
-            let inherited = lines_of(value).map(|lines| lines.map.clone());
+            let inherited =
+                (unplaced == 0).then(|| lines_of(value).map(|lines| lines.map.clone())).flatten();
             let of_modifiers = all_provided(value);
             for (line, position) in inherited.into_iter().flatten() {
                 self.add_alignment_line(&mut map, line, position, child, last);
             }
             for layer in (0..last).rev() {
+                let mask = if layer >= crate::tree::MOTION_LAYERS {
+                    u32::MAX
+                } else {
+                    (1u32 << layer) - 1
+                };
+                if unplaced & mask != 0 {
+                    continue;
+                }
                 for (_, line, _) in of_modifiers.iter().filter(|(at, _, _)| *at as usize == layer) {
                     let value = self.node(child);
                     let position = provided_at(value, layer, *line).expect("just found")
@@ -708,6 +724,9 @@ impl UiTree {
         let measured = if let Some(position) = provided_at(value, layer, line) {
             position
         } else if layer + 1 < value.layers.len() {
+            if layer < crate::tree::MOTION_LAYERS && value.unplaced_layers & (1u32 << layer) != 0 {
+                return AlignmentLine::UNSPECIFIED;
+            }
             match self.peek_alignment_line(node, layer + 1, line) {
                 AlignmentLine::UNSPECIFIED => return AlignmentLine::UNSPECIFIED,
                 inner => inner + line.of(value.layers[layer + 1].offset),
@@ -727,12 +746,18 @@ impl UiTree {
         let mut merged = AlignmentLine::UNSPECIFIED;
         for child in &self.node(node).children {
             let value = self.node(child.node);
-            if !value.placed || value.deactivated {
+            if !value.placed_by_parent || value.deactivated {
                 continue;
             }
+            let unplaced = value.unplaced_layers;
             let last = value.layers.len() - 1;
             // The outermost that gives it, or what's in it, from its last layer.
             let given = (0..=last).find_map(|at| {
+                let mask =
+                    if at >= crate::tree::MOTION_LAYERS { u32::MAX } else { (1u32 << at) - 1 };
+                if unplaced & mask != 0 {
+                    return None;
+                }
                 let position = provided_at(value, at, line)?;
                 let centered = if at < last {
                     line.of(crate::measure::centering(&value.layers[at]))
@@ -743,10 +768,11 @@ impl UiTree {
             });
             let (layer, position) = match given {
                 Some(given) => given,
-                None => match self.peek_inherited_line(child.node, line) {
+                None if unplaced == 0 => match self.peek_inherited_line(child.node, line) {
                     AlignmentLine::UNSPECIFIED => continue,
                     inner => (last, inner),
                 },
+                None => continue,
             };
             let point = self.map_line_out_of_node(child.node, layer, position as f32);
             let position = if line.is_horizontal() { point.y } else { point.x }.round() as i32;

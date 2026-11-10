@@ -307,14 +307,19 @@ impl UiTree {
         }
     }
 
-    /// `node` is a repaint boundary in the tree, not placed, its content and layer unchanged
-    /// since it was last drawn, and those of the boundaries nested in it: what it drew is what
-    /// the frame placing it again draws. One that changed isn't drawn while not placed (a
-    /// spinner in an item scrolled away runs nothing, as in Compose): the frame placing it
-    /// draws it.
+    /// `node` is a repaint boundary in the tree, not placed by its parent, its content and layer
+    /// unchanged since it was last drawn, and those of the boundaries nested in it: what it drew
+    /// is what the frame placing it again draws. One that changed isn't drawn while not placed
+    /// (a spinner in an item scrolled away runs nothing, as in Compose): the frame placing it
+    /// draws it. The boundaries nested in it are unplaced with it (D2383) yet placed by their
+    /// parents: drawn with its group, not kept on their own (D2449).
     fn stays_kept(&self, node: NodeId) -> bool {
         self.get(node).is_some_and(|value| {
-            !value.placed && !value.overlay && value.parent.is_some() && self.drawn_unchanged(node)
+            !value.placed
+                && !value.placed_by_parent
+                && !value.overlay
+                && value.parent.is_some()
+                && self.drawn_unchanged(node)
         })
     }
 
@@ -414,6 +419,7 @@ impl UiTree {
     fn waits_to_draw_ahead(&self, node: NodeId) -> bool {
         self.get(node).is_some_and(|value| {
             !value.placed
+                && value.unplaced_layers == 0
                 && value.parent.is_some()
                 && value
                     .retained
@@ -455,9 +461,18 @@ impl UiTree {
                 break node;
             }
         };
+        struct DrawingAhead<'a>(&'a mut UiTree);
+        impl Drop for DrawingAhead<'_> {
+            fn drop(&mut self) {
+                self.0.drawing_ahead = false;
+            }
+        }
         let observer = self.observer.clone();
         let mut groups = Vec::new();
-        self.draw_boundary::<P>(node, &mut groups, observer.as_deref());
+        self.drawing_ahead = true;
+        let guard = DrawingAhead(self);
+        guard.0.draw_boundary::<P>(node, &mut groups, observer.as_deref());
+        drop(guard);
         Some(groups)
     }
 
@@ -471,7 +486,12 @@ impl UiTree {
         observer: Option<&compose_runtime::platform::ReadObserver>,
     ) {
         let value = self.node(node);
-        if !value.placed {
+        if !value.placed
+            && (!self.drawing_ahead
+                || !value.placed_by_parent
+                || value.deactivated
+                || value.unplaced_layers != 0)
+        {
             return;
         }
         if value.retained.is_some() {

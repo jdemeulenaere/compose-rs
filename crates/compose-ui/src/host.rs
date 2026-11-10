@@ -913,6 +913,26 @@ impl UiHost {
     /// `fill_parent_max_*` read) is measured again within this layout, a few rounds at most,
     /// rather than at the next frame.
     fn lay_out(&mut self, size: IntSize) -> bool {
+        // What handles ask in it is applied in it: they ask for no other frame unless it's left
+        // (D2382). Over when dropped, a panic included.
+        struct LayingOut(Rc<crate::focus_requester::FocusRequests>);
+        impl Drop for LayingOut {
+            fn drop(&mut self) {
+                self.0.laying_out.set(false);
+            }
+        }
+        let requests = self.with_tree(|tree| tree.focus_requests.clone());
+        requests.laying_out.set(true);
+        let laying_out = LayingOut(requests);
+        let measured = self.lay_out_rounds(size);
+        drop(laying_out);
+        if self.with_tree(|tree| tree.has_node_requests() || tree.has_pending_layout()) {
+            self.frame_requested.set(true);
+        }
+        measured
+    }
+
+    fn lay_out_rounds(&mut self, size: IntSize) -> bool {
         let mut measured = false;
         // A callback's writes read by measurements are laid out here too (those read by
         // composition, by the frame's next round).

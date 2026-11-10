@@ -319,16 +319,24 @@ impl SubcompositionsState {
     }
 
     /// The layout's group forgot what it remembers: reused or deactivated, its node stays and all
-    /// its slots are out of use, as `onReuse` and `onDeactivate`; removed, its node's gone and so
-    /// will the slots be, with what's kept ([`LayoutKeeper`]).
+    /// its slots are out of use, as `onReuse` and `onDeactivate`; removed (its node gone first, as
+    /// rule R1 releases nodes before remembered values), its slots are disposed now, as its
+    /// `onRelease` among the forgotten in reverse order: a nested layout's before the effects
+    /// remembered ahead of it in the slot holding it (D2394). What's kept ([`LayoutKeeper`])
+    /// finds nothing left then.
     fn on_layout_forgotten(&self) {
         let (handle, root) = {
             let inner = self.inner.borrow();
             let (Some(handle), Some(root)) = (inner.handle.clone(), inner.root) else { return };
             (handle, root)
         };
-        if !handle.is_disposed() && handle.with_applier(|tree: &mut UiTree| tree.contains(root)) {
+        if handle.is_disposed() {
+            return;
+        }
+        if handle.with_applier(|tree: &mut UiTree| tree.contains(root)) {
             self.mark_active_as_reused();
+        } else {
+            self.dispose_current_nodes();
         }
     }
 
@@ -461,17 +469,19 @@ impl SubcompositionsState {
                 .clone();
             (composition, reuse, handle, root)
         };
-        // A closure as a `Callback` isn't an `Fn` of its own.
-        #[allow(clippy::redundant_closure)]
         let pass = move || match (pausable, reuse) {
-            (true, true) => Some(composition.set_pausable_content_with_reuse(move || content())),
-            (true, false) => Some(composition.set_pausable_content(move || content())),
+            (true, true) => Some(
+                composition.set_pausable_content_with_reuse(move || SlotContent(content.clone())),
+            ),
+            (true, false) => {
+                Some(composition.set_pausable_content(move || SlotContent(content.clone())))
+            }
             (false, true) => {
-                composition.set_content_with_reuse(move || content());
+                composition.set_content_with_reuse(move || SlotContent(content.clone()));
                 None
             }
             (false, false) => {
-                composition.set_content(move || content());
+                composition.set_content(move || SlotContent(content.clone()));
                 None
             }
         };
@@ -698,6 +708,16 @@ impl SubcompositionsState {
             );
         }
     }
+}
+
+/// A slot's content, as Compose's `ReusableContentHost(active, content)` around it: a skippable
+/// call, so a pass the layout forces (its body ran, `force_recompose_children`) skips the content
+/// when the same one has nothing invalid, and a scope inside it the recomposer already recomposed
+/// isn't run again (D2393). A reused slot's pass reads its groups as new, so it doesn't skip.
+#[composable]
+#[allow(non_snake_case)]
+fn SlotContent(content: Callback) {
+    content();
 }
 
 /// What's done to a slot's composition as it goes out of use, once the state's not borrowed: as

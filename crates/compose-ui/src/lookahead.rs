@@ -79,18 +79,21 @@ pub(crate) struct LookaheadState {
     layer_constraints: SmallVec<[Constraints; 2]>,
     layers: SmallVec<[Layer; 2]>,
     constraints: Option<Constraints>,
-    needs_measure: bool,
+    pub(crate) needs_measure: bool,
     subtree_needs_measure: bool,
     needs_placement: bool,
     subtree_needs_placement: bool,
     placed: bool,
+    placed_by_parent: bool,
+    unplaced_layers: u32,
     place_order: u64,
     placements: Option<Box<NodePlacements>>,
     content_placed_in: u64,
     measured_in: u64,
-    measured_in_block: bool,
+    pub(crate) measured_in_block: bool,
+    pub(crate) measured_by_parent: bool,
     motion_layers: u32,
-    intrinsics_asked: bool,
+    pub(crate) intrinsics_asked: bool,
     children_intrinsics_asked: bool,
 }
 
@@ -106,11 +109,14 @@ impl LookaheadState {
             needs_placement: false,
             subtree_needs_placement: false,
             placed: false,
+            placed_by_parent: false,
+            unplaced_layers: 0,
             place_order: 0,
             placements: None,
             content_placed_in: 0,
             measured_in: 0,
             measured_in_block: false,
+            measured_by_parent: false,
             motion_layers: 0,
             intrinsics_asked: false,
             children_intrinsics_asked: false,
@@ -147,11 +153,14 @@ impl LookaheadState {
         mem::swap(&mut self.needs_placement, &mut value.needs_placement);
         mem::swap(&mut self.subtree_needs_placement, &mut value.subtree_needs_placement);
         mem::swap(&mut self.placed, &mut value.placed);
+        mem::swap(&mut self.placed_by_parent, &mut value.placed_by_parent);
+        mem::swap(&mut self.unplaced_layers, &mut value.unplaced_layers);
         mem::swap(&mut self.place_order, &mut value.place_order);
         mem::swap(&mut self.placements, &mut value.placements);
         mem::swap(&mut self.content_placed_in, &mut value.content_placed_in);
         mem::swap(&mut self.measured_in, &mut value.measured_in);
         mem::swap(&mut self.measured_in_block, &mut value.measured_in_block);
+        mem::swap(&mut self.measured_by_parent, &mut value.measured_by_parent);
         mem::swap(&mut self.motion_layers, &mut value.motion_layers);
         mem::swap(&mut self.intrinsics_asked, &mut value.intrinsics_asked);
         mem::swap(&mut self.children_intrinsics_asked, &mut value.children_intrinsics_asked);
@@ -265,11 +274,18 @@ impl UiTree {
         // It's where the other pass put it, as `placeSelf`: its parent's only placed that once.
         let value = self.node_mut(root);
         let state = value.lookahead.as_ref().expect("just changed");
-        let (placed, at) = (state.placed, state.layers.first().map(|it| (it.position, it.offset)));
-        value.placed = placed;
+        let (placed, at) =
+            (state.placed_by_parent, state.layers.first().map(|it| (it.position, it.offset)));
+        value.placed_by_parent = placed;
         if let (Some((position, offset)), Some(layer)) = (at, value.layers.first_mut()) {
             layer.position = position;
             layer.offset = offset;
+        }
+        // Placed inside as this pass last placed it, under a placed parent (D2383, D2446).
+        if self.parent_is_placed(root) && placed && self.node(root).unplaced_layers == 0 {
+            self.mark_subtree_placed(root);
+        } else {
+            self.mark_subtree_not_placed(root);
         }
         LookaheadPass { tree: self, root }
     }

@@ -205,6 +205,92 @@ impl UiTree {
         if self.in_lookahead {
             self.measure_now_after_ahead(node);
         }
+        // What its handles ask of it while it's measured is what this measurement does: dropped
+        // after, as Compose swallows `requestRemeasure` and `requestRelayout` of a node
+        // `Measuring` (D2381, D2447). Steady passes pay two `Cell<bool>` loads (`has_node_requests`).
+        let mark = if self.focus_requests.has_node_requests.get() {
+            self.mark_own_requests()
+        } else {
+            (0, 0, 0)
+        };
+        let size = self.measure_now(node, constraints);
+        if self.focus_requests.has_node_requests.get() {
+            self.drop_own_requests(node, mark, true);
+        }
+        size
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn mark_own_requests(&self) -> (u32, usize, usize) {
+        (
+            self.focus_requests.drain_epoch.get(),
+            self.focus_requests.node_invalidations.borrow().len(),
+            self.focus_requests.measure_requests.borrow().len(),
+        )
+    }
+
+    /// The requests `node`'s handles or `Remeasurement` queued from `mark` on, while it was
+    /// measured (`measuring`) or its blocks ran, for its measurement or placement while measured,
+    /// its placement while placed: what's running does them, as Compose's `requestRemeasure` of a
+    /// node `Measuring` and `requestRelayout` of one `Measuring` or `LayingOut` return at once
+    /// (D2381, D2447). If a nested `drain_node_requests` (`subcompose`) bumped `drain_epoch`,
+    /// earlier entries were already applied and emptied so scanning starts at `0`.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn drop_own_requests(
+        &mut self,
+        node: NodeId,
+        (epoch, since_inv, since_meas): (u32, usize, usize),
+        measuring: bool,
+    ) {
+        use crate::node_context::Invalidation;
+        let drained = self.focus_requests.drain_epoch.get() != epoch;
+        let since_inv = if drained { 0 } else { since_inv };
+        let since_meas = if drained { 0 } else { since_meas };
+        let mut queue = self.focus_requests.node_invalidations.borrow_mut();
+        let own = |&(id, _, what): &(NodeId, crate::node_chain::EntryId, Invalidation)| {
+            id == node
+                && match what {
+                    Invalidation::Placement => true,
+                    Invalidation::Measurement => measuring,
+                    _ => false,
+                }
+        };
+        if queue.get(since_inv..).is_some_and(|tail| tail.iter().any(own)) {
+            let mut index = 0;
+            queue.retain(|entry| {
+                index += 1;
+                index <= since_inv || !own(entry)
+            });
+        }
+        let inv_left = !queue.is_empty();
+        drop(queue);
+        let mut meas_queue = self.focus_requests.measure_requests.borrow_mut();
+        if measuring && meas_queue.get(since_meas..).is_some_and(|tail| tail.contains(&node)) {
+            let mut index = 0;
+            meas_queue.retain(|&id| {
+                index += 1;
+                index <= since_meas || id != node
+            });
+        }
+        let meas_left = !meas_queue.is_empty();
+        drop(meas_queue);
+        self.focus_requests.has_node_requests.set(inv_left || meas_left);
+    }
+
+    /// `measure_node`'s measurement, the node not measured since or changed.
+    fn measure_now(&mut self, node: NodeId, constraints: Constraints) -> IntSize {
+        let value = self.node_mut(node);
+        // Layers its chain no longer has say nothing of its placing (D2383).
+        if value.unplaced_layers != 0 {
+            let inner = value.layers.len() - 1;
+            let kept = if inner >= 32 { u32::MAX } else { (1u32 << inner) - 1 };
+            if value.unplaced_layers & !kept != 0 {
+                let mask = value.unplaced_layers & kept;
+                self.unplaced_layers_changed(node, mask);
+            }
+        }
         let value = self.node_mut(node);
         value.needs_measure = false;
         value.subtree_needs_measure = false;
@@ -268,6 +354,7 @@ impl UiTree {
     /// Compose's `doRemeasure` asks it. Nothing for a deactivated node or one out of the tree;
     /// the root, or a node never measured, is measured in the next layout.
     pub(crate) fn remeasure_now(&mut self, node: NodeId) {
+        self.drain_node_requests();
         let root = self.root_id();
         let Some(value) = self.get(node) else { return };
         // Out of the tree, or content kept for reuse: no layout measures it either.
@@ -279,13 +366,33 @@ impl UiTree {
             return;
         };
         let before = value.layers[0].size;
-        self.node_mut(node).needs_measure = true;
+        let value = self.node_mut(node);
+        value.needs_measure = true;
+        if let Some(ahead) = value.lookahead.as_mut() {
+            ahead.needs_measure = true;
+        }
         // A measurement isn't a place to measure from (its callbacks invalidate instead).
         let allowed = mem::replace(&mut self.remeasure_allowed, false);
-        let result = panic::catch_unwind(AssertUnwindSafe(|| self.measure_node(node, constraints)));
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            let size = self.measure_node(node, constraints);
+            let value = self.node(node);
+            if self.parent_is_placed(node)
+                && value.placed_by_parent
+                && (value.needs_placement
+                    || value.subtree_needs_placement
+                    || value
+                        .lookahead
+                        .as_ref()
+                        .is_some_and(|ahead| ahead.needs_placement_pending()))
+            {
+                self.place_pass(node);
+            }
+            size
+        }));
         self.remeasure_allowed = allowed;
         let size = result.unwrap_or_else(|panic| panic::resume_unwind(panic));
         self.laid_out_since_callbacks = true;
+        self.hover_stale = true;
         // Popups measured in it are placed by their providers, as after a layout.
         if !self.overlays.is_empty() {
             self.position_overlays();
@@ -294,6 +401,70 @@ impl UiTree {
             && let Some(parent) = self.parent_of(node)
         {
             self.invalidate_measure(parent);
+        } else {
+            self.clear_clean_subtree_flags_above(node);
+        }
+    }
+
+    /// Clears `subtree_needs_measure` and `subtree_needs_placement` left on `node`'s ancestors
+    /// when `remeasure_now` finishes `node` and no sibling still needs them, so
+    /// `has_pending_layout` doesn't stay true for work already done.
+    #[cold]
+    fn clear_clean_subtree_flags_above(&mut self, node: NodeId) {
+        let mut current = self.parent_of(node);
+        while let Some(parent) = current {
+            let value = self.node(parent);
+            let still_measure = value.subtree_needs_measure
+                && value.children.iter().any(|child| {
+                    let child = self.node(child.node);
+                    !child.deactivated && (child.needs_measure || child.subtree_needs_measure)
+                });
+            let still_place = value.subtree_needs_placement
+                && value.children.iter().any(|child| {
+                    let child = self.node(child.node);
+                    child.placed_by_parent
+                        && !child.deactivated
+                        && (child.needs_placement
+                            || child.subtree_needs_placement
+                            || child
+                                .lookahead
+                                .as_ref()
+                                .is_some_and(|ahead| ahead.needs_placement_pending()))
+                });
+            let value = self.node_mut(parent);
+            let changed = (value.subtree_needs_measure && !still_measure)
+                || (value.subtree_needs_placement && !still_place);
+            value.subtree_needs_measure = still_measure;
+            value.subtree_needs_placement = still_place;
+            if !changed {
+                break;
+            }
+            current = value.parent;
+        }
+    }
+
+    /// `node`'s parent no longer uses its measurement (a slot kept for reuse), as Compose's
+    /// `resetLayoutState` (`measuredByParent = NotUsed`): what it asks waits for whoever
+    /// measures it next (`remeasure_children_in_place`, D2380). A virtual node's are its
+    /// children's.
+    pub(crate) fn reset_layout_state(&mut self, node: NodeId) {
+        let Some(value) = self.get(node) else { return };
+        if !value.is_virtual {
+            let value = self.node_mut(node);
+            value.measured_by_parent = false;
+            value.measured_in_block = false;
+            value.intrinsics_asked = false;
+            if let Some(ahead) = value.lookahead.as_mut() {
+                ahead.measured_by_parent = false;
+                ahead.measured_in_block = false;
+                ahead.intrinsics_asked = false;
+            }
+            return;
+        }
+        let count = value.children.len();
+        for index in 0..count {
+            let child = self.node(node).children[index].node;
+            self.reset_layout_state(child);
         }
     }
 
@@ -333,6 +504,13 @@ impl UiTree {
             // `invalidateIntrinsicsParent`.
             if value.intrinsics_asked && self.intrinsics_invalidated(child) {
                 return true;
+            }
+            // Never measured, or its parent no longer measures or places it: what it asks waits
+            // for its parent to measure it, as Compose's `requestRemeasure` of a node neither
+            // placed nor `canAffectPlacedParent` only marks it pending (D2380). A new child
+            // measures its parent by its insertion.
+            if !value.placed_by_parent && !value.measured_by_parent {
+                continue;
             }
             let Some(constraints) = value.constraints else { return true };
             let before = value.layers[0].size;
@@ -512,6 +690,16 @@ impl UiTree {
             }
             let result = self.recover(node, result);
             self.mirror(relative, result.width);
+            // Whether it placed what's inside it; with a block, the block says when it runs
+            // (D2383).
+            let value = self.node(node);
+            let block = (value.placements.as_ref()).is_some_and(|placements| {
+                placements.blocks.get(layer).is_some_and(Option::is_some)
+            });
+            if !block {
+                let placed = value.content_placed_in == run;
+                self.note_inside_placed(node, layer, placed);
+            }
             result
         } else {
             let policy = value.policy.clone();
@@ -522,8 +710,9 @@ impl UiTree {
                 for index in 0..self.node(node).children.len() {
                     let child = self.node(node).children[index].node;
                     let child = self.node_mut(child);
-                    child.placed = false;
+                    child.placed_by_parent = false;
                     child.measured_in_block = false;
+                    child.measured_by_parent = false;
                 }
             }
             let children =
@@ -534,8 +723,9 @@ impl UiTree {
             let mut scattered = false;
             for (index, child) in children.iter().enumerate() {
                 let child = self.node_mut(child.node);
-                child.placed = false;
+                child.placed_by_parent = false;
                 child.measured_in_block = false;
+                child.measured_by_parent = false;
                 if child.deactivated {
                     active = active.min(index);
                 } else if active < index {
@@ -574,6 +764,20 @@ impl UiTree {
             }
             let result = self.recover(node, result);
             self.mirror(relative, result.width);
+            // Any previously placed child not placed here (and without a placement block to
+            // place it) becomes unplaced, its subtree with it (D2383).
+            let has_block = (self.node(node).placements.as_ref()).is_some_and(|placements| {
+                placements.blocks.get(layer).is_some_and(Option::is_some)
+            });
+            if !has_block {
+                for index in 0..self.node(node).children.len() {
+                    let child = self.node(node).children[index].node;
+                    let child_val = self.node(child);
+                    if !child_val.placed_by_parent && child_val.placed {
+                        self.mark_subtree_not_placed(child);
+                    }
+                }
+            }
             result
         };
         let measured = IntSize::new(result.width.max(0), result.height.max(0));
@@ -831,7 +1035,7 @@ impl UiTree {
         let waiting = value.needs_placement || value.subtree_needs_placement;
         if layer == 0 {
             // A measurement or block clears its children's before it runs.
-            assert!(run == 0 || !value.placed, "compose-ui: a child was placed twice");
+            assert!(run == 0 || !value.placed_by_parent, "compose-ui: a child was placed twice");
         } else {
             assert!(run == 0 || value.content_placed_in != run, "compose-ui: placed twice");
             value.content_placed_in = run;
@@ -842,7 +1046,10 @@ impl UiTree {
         let moved = entry.offset != offset;
         entry.offset = offset;
         if layer == 0 {
-            value.placed = true;
+            value.placed_by_parent = true;
+            if !value.placed && value.unplaced_layers == 0 {
+                self.mark_subtree_placed(node);
+            }
             self.place_serial += 1;
             let serial = self.place_serial;
             self.node_mut(node).place_order = serial;
