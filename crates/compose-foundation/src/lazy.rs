@@ -1999,10 +1999,15 @@ fn LazyList(
 #[allow(non_snake_case)]
 pub(super) fn LazyItem(index: usize, item_key: u64, state: LazyListState) {
     let inner = state.inner_or_detached();
-    // Run again when the list's factory changes (`LazyItemsLayout`), so `LazyItem` gets the new
-    // `items`, `holder` and `stacking` even when the slot's `SlotContent` skips its cached
-    // `Callback` (D2393), while keeping this item's `Layout` node for reuse if its key went.
-    inner.contents.scopes.borrow_mut().insert(item_key, compose_runtime::current_recompose_scope());
+    // Run again when the list's holder or stacking change (`LazyItemsLayout`), which the slot's
+    // `SlotContent` skipping its cached `Callback` wouldn't pass it (D2393), while keeping this
+    // item's `Layout` node for reuse if its key went. A change of the items alone runs its
+    // content's scope below (D2449).
+    inner
+        .contents
+        .item_scopes
+        .borrow_mut()
+        .insert(item_key, compose_runtime::current_recompose_scope());
     // The factory as it is now, as Compose's item reads `itemProvider()`.
     let Some(factory) = inner.factory.borrow().clone() else {
         return;
@@ -2052,9 +2057,15 @@ pub(super) fn LazyItem(index: usize, item_key: u64, state: LazyListState) {
         modifier,
         policy as Rc<dyn MeasurePolicy>,
         compose_runtime::callback(move || {
-            // If this inner scope restarts for a state of its own after the list's content
-            // changed, read the latest items too.
+            // Run again when the list's content changes (`LazyItemsLayout`), with the items as
+            // they are then, as Compose's item reads `itemProvider()`; also when this inner scope
+            // restarts for a state of its own after the list's content changed.
             let inner = state.inner_or_detached();
+            inner
+                .contents
+                .scopes
+                .borrow_mut()
+                .insert(item_key, compose_runtime::current_recompose_scope());
             let current = inner.factory.borrow().as_ref().map(|it| (it.items.clone(), it.holder));
             drop(inner);
             let (items, holder, found) = match current {

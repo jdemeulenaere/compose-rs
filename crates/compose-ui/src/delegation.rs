@@ -700,10 +700,8 @@ impl UiTree {
         let parent_data_changed = kinds != before && self.entry_kinds_changed(node, before, kinds);
         if changes.any(NodeKinds::PARENT_DATA) {
             // The fold asks every node of the chain, and one may be running: where the tree
-            // applies its nodes' requests, as a node's own `invalidate_parent_data`.
-            let requests = &self.focus_requests;
-            requests.node_invalidations.borrow_mut().push((node, id, Invalidation::ParentData));
-            requests.wake();
+            // applies its nodes' requests, as a node's own `invalidate_parent_data` (D2447).
+            self.focus_requests.push_invalidation(node, id, Invalidation::ParentData);
         }
         if changes.any(NodeKinds::FOCUS_TARGET | NodeKinds::FOCUS_PROPERTIES) {
             self.focus_delegates_changed(node);

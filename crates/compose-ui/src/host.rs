@@ -926,7 +926,7 @@ impl UiHost {
         let laying_out = LayingOut(requests);
         let measured = self.lay_out_rounds(size);
         drop(laying_out);
-        if self.with_tree(|tree| tree.has_node_requests()) {
+        if self.with_tree(|tree| tree.has_node_requests() || tree.has_pending_layout()) {
             self.frame_requested.set(true);
         }
         measured

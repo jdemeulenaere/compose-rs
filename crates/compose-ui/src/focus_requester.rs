@@ -60,6 +60,13 @@ pub(crate) struct FocusRequests {
     /// Layout nodes a `Remeasurement` asked to measure while their tree was busy: measured in
     /// the next layout.
     pub(crate) measure_requests: RefCell<Vec<NodeId>>,
+    /// Whether `node_invalidations` or `measure_requests` holds anything, so steady-state
+    /// `measure_node`, `run_placement_blocks_now`, and `drain_node_requests` borrow neither
+    /// `RefCell` (D2447).
+    pub(crate) has_node_requests: Cell<bool>,
+    /// Bumped each time `drain_node_requests` empties the queues, so an enclosing `measure_node`
+    /// knows a nested `subcompose` drained earlier entries (D2447).
+    pub(crate) drain_epoch: Cell<u32>,
     /// The reads modifier nodes observe, here so handles reach them with the tree busy.
     pub(crate) observations: RefCell<crate::observer_node::NodeObservations>,
     /// The entries handles were made for that are attached, by `EntryId`: what
@@ -121,6 +128,27 @@ impl FocusRequests {
         let wake = self.wake.borrow().clone();
         if let Some(wake) = wake {
             wake();
+        }
+    }
+
+    pub(crate) fn push_invalidation(
+        &self,
+        node: NodeId,
+        entry: EntryId,
+        what: crate::node_context::Invalidation,
+    ) {
+        self.has_node_requests.set(true);
+        self.node_invalidations.borrow_mut().push((node, entry, what));
+        if !self.laying_out.get() {
+            self.wake();
+        }
+    }
+
+    pub(crate) fn push_measure_request(&self, node: NodeId) {
+        self.has_node_requests.set(true);
+        self.measure_requests.borrow_mut().push(node);
+        if !self.laying_out.get() {
+            self.wake();
         }
     }
 }

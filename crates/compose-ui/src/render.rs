@@ -307,14 +307,19 @@ impl UiTree {
         }
     }
 
-    /// `node` is a repaint boundary in the tree, not placed, its content and layer unchanged
-    /// since it was last drawn, and those of the boundaries nested in it: what it drew is what
-    /// the frame placing it again draws. One that changed isn't drawn while not placed (a
-    /// spinner in an item scrolled away runs nothing, as in Compose): the frame placing it
-    /// draws it.
+    /// `node` is a repaint boundary in the tree, not placed by its parent, its content and layer
+    /// unchanged since it was last drawn, and those of the boundaries nested in it: what it drew
+    /// is what the frame placing it again draws. One that changed isn't drawn while not placed
+    /// (a spinner in an item scrolled away runs nothing, as in Compose): the frame placing it
+    /// draws it. The boundaries nested in it are unplaced with it (D2383) yet placed by their
+    /// parents: drawn with its group, not kept on their own (D2449).
     fn stays_kept(&self, node: NodeId) -> bool {
         self.get(node).is_some_and(|value| {
-            !value.placed && !value.overlay && value.parent.is_some() && self.drawn_unchanged(node)
+            !value.placed
+                && !value.placed_by_parent
+                && !value.overlay
+                && value.parent.is_some()
+                && self.drawn_unchanged(node)
         })
     }
 

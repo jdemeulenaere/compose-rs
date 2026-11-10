@@ -93,7 +93,7 @@ pub(crate) struct LookaheadState {
     pub(crate) measured_in_block: bool,
     pub(crate) measured_by_parent: bool,
     motion_layers: u32,
-    intrinsics_asked: bool,
+    pub(crate) intrinsics_asked: bool,
     children_intrinsics_asked: bool,
 }
 
@@ -275,8 +275,8 @@ impl UiTree {
             layer.position = position;
             layer.offset = offset;
         }
-        // Placed inside as this pass last placed it (D2383).
-        if placed && self.node(root).unplaced_layers == 0 {
+        // Placed inside as this pass last placed it, under a placed parent (D2383, D2446).
+        if self.parent_is_placed(root) && placed && self.node(root).unplaced_layers == 0 {
             self.mark_subtree_placed(root);
         } else {
             self.mark_subtree_not_placed(root);

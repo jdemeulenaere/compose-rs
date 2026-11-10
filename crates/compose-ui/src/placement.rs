@@ -652,11 +652,15 @@ impl UiTree {
         if !self.new_layers.is_empty() {
             self.run_new_layers();
         }
-        // What its handles ask of its placement while its blocks run is what they do (D2381).
-        let queued = self.focus_requests.node_invalidations.borrow().len();
+        // What its handles ask of its placement while its blocks run is what they do (D2381, D2447).
+        let mark = if self.focus_requests.has_node_requests.get() {
+            self.mark_own_requests()
+        } else {
+            (0, 0, 0)
+        };
         self.run_placement_blocks_observed(node);
-        if self.focus_requests.node_invalidations.borrow().len() > queued {
-            self.drop_own_requests(node, queued, false);
+        if self.focus_requests.has_node_requests.get() {
+            self.drop_own_requests(node, mark, false);
         }
     }
 
@@ -690,6 +694,13 @@ impl UiTree {
                             break;
                         }
                     }
+                } else if layer < crate::tree::MOTION_LAYERS
+                    && layer + 1 < self.node(node).layers.len()
+                    && self.node(node).unplaced_layers & (1u32 << layer) != 0
+                {
+                    // Eagerly unplaced in `measure` or already skipped in `run_block_for_alignment`
+                    // (D2445): inner deferred blocks wait too.
+                    break;
                 }
                 layer += 1;
             }
@@ -922,12 +933,17 @@ impl UiTree {
             },
         );
         let pass = self.alignment_pass();
+        let mut run_id = 0;
         let mut run = || {
-            pass.tree.run_placement_block(node, layer, measure_run, first, &block);
+            run_id = pass.tree.run_placement_block(node, layer, measure_run, first, &block);
         };
         match &observer {
             Some(observer) => observer.observe_adding(key, run),
             None => run(),
+        }
+        if layer + 1 < pass.tree.node(node).layers.len() {
+            let placed = pass.tree.node(node).content_placed_in == run_id;
+            pass.tree.note_inside_placed(node, layer, placed);
         }
         if pass.tree.asked_while_aligning.get()
             && let Some(entry) = (pass.tree.node_mut(node).placements.as_mut())

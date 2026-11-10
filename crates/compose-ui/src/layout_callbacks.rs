@@ -1210,7 +1210,7 @@ impl UiTree {
         let mut current = Some(node);
         while let Some(id) = current {
             let value = self.node(id);
-            if !value.placed && value.parent.is_some() && !value.overlay {
+            if !value.placed && value.parent.is_some() {
                 return false;
             }
             current = if value.overlay { None } else { value.parent };

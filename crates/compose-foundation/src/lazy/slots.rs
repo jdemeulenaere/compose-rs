@@ -206,6 +206,10 @@ pub(super) struct ItemContents {
     /// Each item's content's scope, by key: run again when the items change. One per key
     /// composed, trimmed with `contents`.
     pub(super) scopes: RefCell<IndexMap<u64, compose_runtime::RecomposeScope>>,
+    /// Each `LazyItem`'s own scope, by key: run again only when the list's holder or stacking
+    /// change, which its skipped `SlotContent` wouldn't pass it (D2393, D2449). A change of the
+    /// items alone runs the content's scope, as before D2393. Trimmed with `contents`.
+    pub(super) item_scopes: RefCell<IndexMap<u64, compose_runtime::RecomposeScope>>,
     /// When `contents` and `scopes` are trimmed next.
     trim_at: TrimAt,
 }
@@ -232,6 +236,7 @@ impl ItemContents {
         let keys = keys();
         contents.retain(|key, _| keys.contains(key));
         scopes.retain(|key, _| keys.contains(key));
+        self.item_scopes.borrow_mut().retain(|key, _| keys.contains(key));
         self.trim_at.trimmed(contents.len().max(scopes.len()));
     }
 
@@ -501,9 +506,20 @@ pub(super) fn LazyItemsLayout(
     *inner.layout_state.borrow_mut() = Some(layout.clone());
     *inner.prefetch.items.borrow_mut() = Rc::downgrade(&items.0);
     let factory = compose_runtime::remember_keyed((state, items.clone(), holder, stacking), || {
-        // The items' contents run again with these items, in this frame after this composition.
+        // The items' contents run again with these items, in this frame after this composition;
+        // the items themselves too if what they're given besides the items changed (D2449).
         for (_, scope) in inner.contents.scopes.borrow_mut().drain() {
             scope.invalidate();
+        }
+        let given_changed = inner
+            .factory
+            .borrow()
+            .as_ref()
+            .is_none_or(|last| last.holder != holder || last.stacking != stacking);
+        if given_changed {
+            for (_, scope) in inner.contents.item_scopes.borrow_mut().drain() {
+                scope.invalidate();
+            }
         }
         Rc::new(ItemFactory {
             state,

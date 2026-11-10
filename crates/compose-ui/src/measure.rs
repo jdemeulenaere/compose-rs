@@ -207,27 +207,48 @@ impl UiTree {
         }
         // What its handles ask of it while it's measured is what this measurement does: dropped
         // after, as Compose swallows `requestRemeasure` and `requestRelayout` of a node
-        // `Measuring` (D2381). One read of the queue's length before and after.
-        let queued = self.focus_requests.node_invalidations.borrow().len();
+        // `Measuring` (D2381, D2447). Steady passes pay two `Cell<bool>` loads (`has_node_requests`).
+        let mark = if self.focus_requests.has_node_requests.get() {
+            self.mark_own_requests()
+        } else {
+            (0, 0, 0)
+        };
         let size = self.measure_now(node, constraints);
-        if self.focus_requests.node_invalidations.borrow().len() > queued {
-            self.drop_own_requests(node, queued, true);
+        if self.focus_requests.has_node_requests.get() {
+            self.drop_own_requests(node, mark, true);
         }
         size
     }
 
-    /// The requests `node`'s handles queued from `since` on, while it was measured
-    /// (`measuring`) or its blocks ran, for its measurement or placement while measured, its
-    /// placement while placed: what's running does them, as Compose's `requestRemeasure` of a
-    /// node `Measuring` and `requestRelayout` of one `Measuring` or `LayingOut` return at once
-    /// (D2381). A measurement asked while its blocks run waits for after, as Compose postpones
-    /// it. Others' requests stay.
     #[cold]
     #[inline(never)]
-    pub(crate) fn drop_own_requests(&mut self, node: NodeId, since: usize, measuring: bool) {
+    pub(crate) fn mark_own_requests(&self) -> (u32, usize, usize) {
+        (
+            self.focus_requests.drain_epoch.get(),
+            self.focus_requests.node_invalidations.borrow().len(),
+            self.focus_requests.measure_requests.borrow().len(),
+        )
+    }
+
+    /// The requests `node`'s handles or `Remeasurement` queued from `mark` on, while it was
+    /// measured (`measuring`) or its blocks ran, for its measurement or placement while measured,
+    /// its placement while placed: what's running does them, as Compose's `requestRemeasure` of a
+    /// node `Measuring` and `requestRelayout` of one `Measuring` or `LayingOut` return at once
+    /// (D2381, D2447). If a nested `drain_node_requests` (`subcompose`) bumped `drain_epoch`,
+    /// earlier entries were already applied and emptied so scanning starts at `0`.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn drop_own_requests(
+        &mut self,
+        node: NodeId,
+        (epoch, since_inv, since_meas): (u32, usize, usize),
+        measuring: bool,
+    ) {
         use crate::node_context::Invalidation;
+        let drained = self.focus_requests.drain_epoch.get() != epoch;
+        let since_inv = if drained { 0 } else { since_inv };
+        let since_meas = if drained { 0 } else { since_meas };
         let mut queue = self.focus_requests.node_invalidations.borrow_mut();
-        let Some(tail) = queue.get(since..) else { return };
         let own = |&(id, _, what): &(NodeId, crate::node_chain::EntryId, Invalidation)| {
             id == node
                 && match what {
@@ -236,14 +257,26 @@ impl UiTree {
                     _ => false,
                 }
         };
-        if !tail.iter().any(own) {
-            return;
+        if queue.get(since_inv..).is_some_and(|tail| tail.iter().any(own)) {
+            let mut index = 0;
+            queue.retain(|entry| {
+                index += 1;
+                index <= since_inv || !own(entry)
+            });
         }
-        let mut index = 0;
-        queue.retain(|entry| {
-            index += 1;
-            index <= since || !own(entry)
-        });
+        let inv_left = !queue.is_empty();
+        drop(queue);
+        let mut meas_queue = self.focus_requests.measure_requests.borrow_mut();
+        if measuring && meas_queue.get(since_meas..).is_some_and(|tail| tail.contains(&node)) {
+            let mut index = 0;
+            meas_queue.retain(|&id| {
+                index += 1;
+                index <= since_meas || id != node
+            });
+        }
+        let meas_left = !meas_queue.is_empty();
+        drop(meas_queue);
+        self.focus_requests.has_node_requests.set(inv_left || meas_left);
     }
 
     /// `measure_node`'s measurement, the node not measured since or changed.
@@ -343,7 +376,8 @@ impl UiTree {
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
             let size = self.measure_node(node, constraints);
             let value = self.node(node);
-            if value.placed_by_parent
+            if self.parent_is_placed(node)
+                && value.placed_by_parent
                 && (value.needs_placement
                     || value.subtree_needs_placement
                     || value
@@ -419,9 +453,11 @@ impl UiTree {
             let value = self.node_mut(node);
             value.measured_by_parent = false;
             value.measured_in_block = false;
+            value.intrinsics_asked = false;
             if let Some(ahead) = value.lookahead.as_mut() {
                 ahead.measured_by_parent = false;
                 ahead.measured_in_block = false;
+                ahead.intrinsics_asked = false;
             }
             return;
         }

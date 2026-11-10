@@ -845,12 +845,11 @@ impl UiTree {
     }
 
     pub(crate) fn drain_node_requests(&mut self) {
-        if self.focus_requests.measure_requests.borrow().is_empty()
-            && self.focus_requests.node_invalidations.borrow().is_empty()
-        {
+        if !self.focus_requests.has_node_requests.get() {
             return;
         }
         let requests = self.focus_requests.clone();
+        requests.drain_epoch.set(requests.drain_epoch.get().wrapping_add(1));
         if !requests.measure_requests.borrow().is_empty() {
             for node in mem::take(&mut *requests.measure_requests.borrow_mut()) {
                 self.invalidate_layout_of(node);
@@ -872,6 +871,7 @@ impl UiTree {
                 *current = pending;
             }
         }
+        requests.has_node_requests.set(!requests.measure_requests.borrow().is_empty());
     }
 
     /// Whether nodes asked for something through their handles: what needs a frame. Not the

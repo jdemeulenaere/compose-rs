@@ -543,8 +543,14 @@ impl UiTree {
                     if inner == AlignmentLine::UNSPECIFIED {
                         return inner;
                     }
-                    // To know where its content is, as `replace`.
+                    // To know where its content is, as `replace`; if it didn't place it, no line
+                    // crosses `layer` (D2445).
                     self.run_block_for_alignment(node, layer);
+                    if layer < crate::tree::MOTION_LAYERS
+                        && self.node(node).unplaced_layers & (1u32 << layer) != 0
+                    {
+                        return AlignmentLine::UNSPECIFIED;
+                    }
                     inner + line.of(self.node(node).layers[layer + 1].offset)
                 }
             }
